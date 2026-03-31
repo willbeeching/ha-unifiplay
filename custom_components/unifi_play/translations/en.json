@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to UniFi Play",
+        "description": "Enter your UDM Pro (or UniFi OS Console) address and an API key.",
+        "data": {
+          "controller_host": "Controller Host",
+          "api_key": "API Key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the controller.",
+      "invalid_auth": "Invalid API key.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This controller is already configured."
+    }
+  }
+}
