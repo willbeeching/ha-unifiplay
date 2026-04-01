@@ -41,9 +41,18 @@ Copy the `custom_components/unifi_play` folder into your Home Assistant `config/
 
 ## Configuration
 
+### 1. Create a UniFi API key
+
+1. Log in to your UniFi OS Console (e.g. `https://10.0.0.1`)
+2. Navigate to **Settings → Control Plane → API Keys**
+3. Click **Create API Key**, give it a name (e.g. "Home Assistant"), and copy the key
+4. Keep this key safe — you won't be able to view it again
+
+### 2. Add the integration
+
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for **UniFi Play**
-3. Enter your UDM Pro IP address (e.g. `10.0.0.1`) and API key
+3. Enter your UniFi OS Console IP address (e.g. `10.0.0.1`) and the API key from step 1
 4. Devices will be discovered automatically
 
 ## How it works
