@@ -1,8 +1,8 @@
 # UniFi Play for Home Assistant
 
 [![CI](https://github.com/willbeeching/ha-unifiplay/actions/workflows/ci.yaml/badge.svg)](https://github.com/willbeeching/ha-unifiplay/actions/workflows/ci.yaml)
-[![GitHub Release](https://img.shields.io/github/v/release/willbeeching/ha-unifiplay?include_prereleases)](https://github.com/willbeeching/ha-unifiplay/releases)
-[![License](https://img.shields.io/github/license/willbeeching/ha-unifiplay)](LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/willbeeching/ha-unifiplay)](https://github.com/willbeeching/ha-unifiplay/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/willbeeching/ha-unifiplay/blob/master/LICENSE)
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 [![vibe-coded](https://img.shields.io/badge/vibe-coded-ff69b4?logo=musicbrainz&logoColor=white)](https://en.wikipedia.org/wiki/Vibe_coding)
 
