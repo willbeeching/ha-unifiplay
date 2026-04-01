@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 
 from .api import UnifiPlayApi, UnifiPlayApiError, UnifiPlayAuthError

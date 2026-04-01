@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from homeassistant.components.media_player import (
     MediaPlayerEntity,
@@ -16,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
+from .coordinator import UnifiPlayCoordinator
 from .entity import UnifiPlayEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,8 +50,7 @@ async def async_setup_entry(
     coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     entities = [
-        UnifiPlayMediaPlayer(coordinator, device_id)
-        for device_id in coordinator.data
+        UnifiPlayMediaPlayer(coordinator, device_id) for device_id in coordinator.data
     ]
 
     async_add_entities(entities, True)

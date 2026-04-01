@@ -135,15 +135,11 @@ class UnifiPlayMqttClient:
             header = parsed.get("header", {})
             body = parsed.get("body", {})
             event_name = header.get("name", header.get("action", "unknown"))
-            _LOGGER.debug(
-                "MQTT event from %s: %s", self._device_ip, event_name
-            )
+            _LOGGER.debug("MQTT event from %s: %s", self._device_ip, event_name)
             if self._on_event:
                 self._on_event(event_name, header, body)
         except Exception:
-            _LOGGER.exception(
-                "Error parsing MQTT message from %s", self._device_ip
-            )
+            _LOGGER.exception("Error parsing MQTT message from %s", self._device_ip)
 
     async def connect(self) -> None:
         """Connect to the device's MQTT broker."""
@@ -179,9 +175,7 @@ class UnifiPlayMqttClient:
     def publish_action(self, action: str, body: dict | None = None) -> None:
         """Send a command to the device."""
         if not self.is_connected:
-            _LOGGER.warning(
-                "Cannot publish, MQTT not connected to %s", self._device_ip
-            )
+            _LOGGER.warning("Cannot publish, MQTT not connected to %s", self._device_ip)
             return
         header = {
             "id": str(uuid.uuid4()),
@@ -202,9 +196,7 @@ class UnifiPlayMqttClient:
 
     def set_source(self, source: str) -> None:
         """Set audio source."""
-        self.publish_action(
-            "select_audio_source", {"select_audio_source": source}
-        )
+        self.publish_action("select_audio_source", {"select_audio_source": source})
 
     def set_mute(self, mute: bool, restore_volume: int = 20) -> None:
         """Mute or unmute. Restores to restore_volume when unmuting."""
@@ -264,15 +256,11 @@ class UnifiPlayMqttClient:
 
     def set_eq_preset(self, preset: str) -> None:
         """Set EQ preset (custom, music, movie, night)."""
-        self.publish_action(
-            "set_equalizer", {"eq_preset": preset, "info_sync": True}
-        )
+        self.publish_action("set_equalizer", {"eq_preset": preset, "info_sync": True})
 
     def set_channels(self, channels: int) -> None:
         """Set channel mode (0=stereo, 1=mono)."""
-        self.publish_action(
-            "set_volume", {"channels": channels, "info_sync": True}
-        )
+        self.publish_action("set_volume", {"channels": channels, "info_sync": True})
 
     def set_sub_crossover(self, crossover: int) -> None:
         """Set subwoofer crossover frequency in Hz."""
@@ -282,15 +270,11 @@ class UnifiPlayMqttClient:
 
     def set_sub_level(self, level: int) -> None:
         """Set subwoofer level."""
-        self.publish_action(
-            "set_sub_audio", {"level": level, "info_sync": True}
-        )
+        self.publish_action("set_sub_audio", {"level": level, "info_sync": True})
 
     def set_sub_phase(self, phase: int) -> None:
         """Set subwoofer phase (0 or 180)."""
-        self.publish_action(
-            "set_sub_audio", {"phase": phase, "info_sync": True}
-        )
+        self.publish_action("set_sub_audio", {"phase": phase, "info_sync": True})
 
     def set_led_color(self, color: str) -> None:
         """Set LED color as hex string (e.g. '0000FF')."""
