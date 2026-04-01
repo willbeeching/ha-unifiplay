@@ -7,7 +7,6 @@ import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import UnifiPlayApi, UnifiPlayApiError
@@ -41,6 +40,15 @@ class UnifiPlayDeviceState:
         self.subwoofer: bool = False
         self.screen_brightness: int = 100
         self.led_brightness: int = 100
+        self.screen_color: str = "0000FF"
+        self.led_color: str = "0000FF"
+        self.channels: int = 0
+        self.persistent_dashboard: bool = False
+        self.dolby_atmos: bool = False
+        self.eq_preset: str = "custom"
+        self.sub_crossover: int = 85
+        self.sub_level: int = 3
+        self.sub_phase: int = 0
         self.now_playing_song: str = ""
         self.now_playing_artist: str = ""
         self.now_playing_album: str = ""
@@ -78,6 +86,34 @@ class UnifiPlayDeviceState:
             self.screen_brightness = body["screen_brightness"]
         if "led_brightness" in body:
             self.led_brightness = body["led_brightness"]
+        if "screen_color" in body:
+            self.screen_color = body["screen_color"]
+        if "led_color" in body:
+            self.led_color = body["led_color"]
+        if "channels" in body:
+            self.channels = body["channels"]
+        if "persistent_dashboard" in body:
+            self.persistent_dashboard = body["persistent_dashboard"]
+
+    def update_from_equalizer(self, body: dict) -> None:
+        """Update EQ state from an MQTT 'equalizer' event."""
+        if "dolby_atmos" in body:
+            self.dolby_atmos = body["dolby_atmos"]
+        if "eq_preset" in body:
+            self.eq_preset = body["eq_preset"]
+        if "eq_enable" in body:
+            self.eq_enable = body["eq_enable"]
+
+    def update_from_sub_audio(self, body: dict) -> None:
+        """Update sub audio state from an MQTT 'sub_audio' event."""
+        if "crossover" in body:
+            self.sub_crossover = body["crossover"]
+        if "level" in body:
+            self.sub_level = body["level"]
+        if "phase" in body:
+            self.sub_phase = body["phase"]
+        if "subwoofer" in body:
+            self.subwoofer = body["subwoofer"]
 
     def update_from_metadata(self, body: dict) -> None:
         """Update now-playing state from an MQTT 'metadata' event."""
@@ -159,6 +195,10 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             state.update_from_metadata(body)
         elif event_name == "online":
             state.update_from_online(body)
+        elif event_name == "equalizer":
+            state.update_from_equalizer(body)
+        elif event_name == "sub_audio":
+            state.update_from_sub_audio(body)
 
         self.async_set_updated_data(self._device_states)
 

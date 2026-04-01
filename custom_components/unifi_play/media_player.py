@@ -28,6 +28,7 @@ SOURCE_MAP = {
     "spotify": "Spotify",
     "hdmi": "HDMI eARC",
     "optical": "Optical",
+    "streaming": "Streaming",
 }
 
 SOURCE_REVERSE_MAP = {v: k for k, v in SOURCE_MAP.items()}

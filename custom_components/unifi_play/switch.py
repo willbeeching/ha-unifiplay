@@ -8,9 +8,8 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
@@ -27,12 +26,20 @@ class UnifiPlaySwitchDescription(SwitchEntityDescription):
 
 SWITCHES: tuple[UnifiPlaySwitchDescription, ...] = (
     UnifiPlaySwitchDescription(
-        key="loudness",
-        translation_key="loudness",
-        name="Loudness",
+        key="dynamic_boost",
+        translation_key="dynamic_boost",
+        name="Dynamic Boost",
         icon="mdi:volume-vibrate",
         value_fn=lambda s: s.loudness,
         set_fn="set_loudness",
+    ),
+    UnifiPlaySwitchDescription(
+        key="dolby_atmos",
+        translation_key="dolby_atmos",
+        name="Dolby Atmos",
+        icon="mdi:surround-sound",
+        value_fn=lambda s: s.dolby_atmos,
+        set_fn="set_dolby_atmos",
     ),
     UnifiPlaySwitchDescription(
         key="equalizer",
@@ -49,6 +56,14 @@ SWITCHES: tuple[UnifiPlaySwitchDescription, ...] = (
         icon="mdi:speaker",
         value_fn=lambda s: s.subwoofer,
         set_fn="set_subwoofer",
+    ),
+    UnifiPlaySwitchDescription(
+        key="persistent_dashboard",
+        translation_key="persistent_dashboard",
+        name="Persistent Dashboard",
+        icon="mdi:monitor",
+        value_fn=lambda s: s.persistent_dashboard,
+        set_fn="set_persistent_dashboard",
     ),
 )
 

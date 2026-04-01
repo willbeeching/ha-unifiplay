@@ -249,6 +249,63 @@ class UnifiPlayMqttClient:
             {"led_brightness": brightness, "info_sync": True},
         )
 
+    def set_dolby_atmos(self, enabled: bool) -> None:
+        """Enable or disable Dolby Atmos."""
+        self.publish_action(
+            "set_equalizer", {"dolby_atmos": enabled, "info_sync": True}
+        )
+
+    def set_persistent_dashboard(self, enabled: bool) -> None:
+        """Enable or disable persistent dashboard display."""
+        self.publish_action(
+            "set_screen_brightness",
+            {"persistent_dashboard": enabled, "info_sync": True},
+        )
+
+    def set_eq_preset(self, preset: str) -> None:
+        """Set EQ preset (custom, music, movie, night)."""
+        self.publish_action(
+            "set_equalizer", {"eq_preset": preset, "info_sync": True}
+        )
+
+    def set_channels(self, channels: int) -> None:
+        """Set channel mode (0=stereo, 1=mono)."""
+        self.publish_action(
+            "set_volume", {"channels": channels, "info_sync": True}
+        )
+
+    def set_sub_crossover(self, crossover: int) -> None:
+        """Set subwoofer crossover frequency in Hz."""
+        self.publish_action(
+            "set_sub_audio", {"crossover": crossover, "info_sync": True}
+        )
+
+    def set_sub_level(self, level: int) -> None:
+        """Set subwoofer level."""
+        self.publish_action(
+            "set_sub_audio", {"level": level, "info_sync": True}
+        )
+
+    def set_sub_phase(self, phase: int) -> None:
+        """Set subwoofer phase (0 or 180)."""
+        self.publish_action(
+            "set_sub_audio", {"phase": phase, "info_sync": True}
+        )
+
+    def set_led_color(self, color: str) -> None:
+        """Set LED color as hex string (e.g. '0000FF')."""
+        self.publish_action(
+            "set_screen_brightness",
+            {"led_color": color, "info_sync": True},
+        )
+
+    def set_screen_color(self, color: str) -> None:
+        """Set screen color as hex string (e.g. '0000FF')."""
+        self.publish_action(
+            "set_screen_brightness",
+            {"screen_color": color, "info_sync": True},
+        )
+
     def locate(self, enable: bool = True) -> None:
         """Flash the device LEDs to locate it."""
         self.publish_action("locate", {"enable": enable})

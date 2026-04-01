@@ -11,9 +11,8 @@ from homeassistant.components.number import (
     NumberMode,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
@@ -79,6 +78,31 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
         mode=NumberMode.SLIDER,
         value_fn=lambda s: float(s.led_brightness),
         set_fn="set_led_brightness",
+    ),
+    UnifiPlayNumberDescription(
+        key="sub_crossover",
+        translation_key="sub_crossover",
+        name="Sub Crossover",
+        icon="mdi:sine-wave",
+        native_min_value=40,
+        native_max_value=200,
+        native_step=5,
+        native_unit_of_measurement="Hz",
+        mode=NumberMode.SLIDER,
+        value_fn=lambda s: float(s.sub_crossover),
+        set_fn="set_sub_crossover",
+    ),
+    UnifiPlayNumberDescription(
+        key="sub_level",
+        translation_key="sub_level",
+        name="Sub Level",
+        icon="mdi:speaker",
+        native_min_value=0,
+        native_max_value=10,
+        native_step=1,
+        mode=NumberMode.SLIDER,
+        value_fn=lambda s: float(s.sub_level),
+        set_fn="set_sub_level",
     ),
 )
 
