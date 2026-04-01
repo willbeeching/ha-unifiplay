@@ -10,13 +10,14 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 
 ## Features
 
-- **Media player** — volume, mute, source select, now-playing metadata
-- **Switches** — loudness, equalizer, subwoofer
-- **Number controls** — balance, volume limit, screen & LED brightness
+- **Media player** — volume, mute, now-playing metadata (song, artist, album)
+- **Selects** — audio input (Streaming / HDMI eARC / Line In), EQ preset, sub phase, channels (stereo/mono)
+- **Switches** — Dynamic Boost, Dolby Atmos / Equalizer, persistent dashboard
+- **Number controls** — balance, volume limit, screen brightness, LED brightness, sub crossover, sub level
+- **Text** — LED color (hex)
 - **Buttons** — locate (flash LEDs), restart
 - **Sensors** — firmware update status
 - **Real-time state** via direct MQTT connection to each device
-- **Source selection** — Line In, Bluetooth, AirPlay, Spotify, HDMI eARC, Optical
 
 ## Requirements
 
@@ -50,6 +51,10 @@ Copy the `custom_components/unifi_play` folder into your Home Assistant `config/
 The integration uses two communication channels:
 
 - **REST API** on the UDM Pro (`/proxy/apollo/api/v1/`) for device discovery
-- **MQTT** (port 8883, TLS) directly to each device for real-time state updates and control
+- **MQTT** (port 8883, mTLS) directly to each device for real-time state updates and control
 
 All communication stays local on your network.
+
+## License
+
+[MIT](LICENSE)
