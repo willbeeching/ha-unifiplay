@@ -14,14 +14,16 @@ from .const import DOMAIN
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
 from .entity import UnifiPlayEntity
 
-CHANNEL_OPTIONS = {"0": "Stereo", "1": "Mono"}
-CHANNEL_REVERSE = {v: k for k, v in CHANNEL_OPTIONS.items()}
-
 PHASE_OPTIONS = {"0": "0\u00b0", "180": "180\u00b0"}
 PHASE_REVERSE = {v: k for k, v in PHASE_OPTIONS.items()}
 
-EQ_PRESET_OPTIONS = ["Custom", "Music", "Movie", "Night"]
-EQ_PRESET_REVERSE = {v: v.lower() for v in EQ_PRESET_OPTIONS}
+CHANNEL_OPTIONS = {"0": "Stereo", "1": "Mono"}
+CHANNEL_REVERSE = {v: k for k, v in CHANNEL_OPTIONS.items()}
+
+EQ_PRESET_OPTIONS = ["Custom", "Music", "Movie", "Night", "Off"]
+
+SOURCE_OPTIONS = {"streaming": "Streaming", "hdmi": "HDMI eARC", "lineIn": "Line In"}
+SOURCE_REVERSE = {v: k for k, v in SOURCE_OPTIONS.items()}
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -35,6 +37,16 @@ class UnifiPlaySelectDescription(SelectEntityDescription):
 
 SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
     UnifiPlaySelectDescription(
+        key="audio_input",
+        translation_key="audio_input",
+        name="Audio Input",
+        icon="mdi:audio-input-stereo-minijack",
+        options=list(SOURCE_OPTIONS.values()),
+        value_fn=lambda s: SOURCE_OPTIONS.get(s.source),
+        set_fn="set_source",
+        convert_fn=lambda v: SOURCE_REVERSE[v],
+    ),
+    UnifiPlaySelectDescription(
         key="eq_preset",
         translation_key="eq_preset",
         name="EQ Preset",
@@ -45,16 +57,6 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
         convert_fn=lambda v: v.lower(),
     ),
     UnifiPlaySelectDescription(
-        key="channels",
-        translation_key="channels",
-        name="Channels",
-        icon="mdi:surround-sound-2-0",
-        options=list(CHANNEL_OPTIONS.values()),
-        value_fn=lambda s: CHANNEL_OPTIONS.get(str(s.channels)),
-        set_fn="set_channels",
-        convert_fn=lambda v: int(CHANNEL_REVERSE[v]),
-    ),
-    UnifiPlaySelectDescription(
         key="sub_phase",
         translation_key="sub_phase",
         name="Sub Phase",
@@ -63,6 +65,16 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
         value_fn=lambda s: PHASE_OPTIONS.get(str(s.sub_phase)),
         set_fn="set_sub_phase",
         convert_fn=lambda v: int(PHASE_REVERSE[v]),
+    ),
+    UnifiPlaySelectDescription(
+        key="channels",
+        translation_key="channels",
+        name="Channels",
+        icon="mdi:surround-sound-2-0",
+        options=list(CHANNEL_OPTIONS.values()),
+        value_fn=lambda s: CHANNEL_OPTIONS.get(str(s.channels)),
+        set_fn="set_channels",
+        convert_fn=lambda v: int(CHANNEL_REVERSE[v]),
     ),
 )
 

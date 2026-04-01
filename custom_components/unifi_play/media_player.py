@@ -20,23 +20,10 @@ from .entity import UnifiPlayEntity
 
 _LOGGER = logging.getLogger(__name__)
 
-SOURCE_MAP = {
-    "lineIn": "Line In",
-    "bluetooth": "Bluetooth",
-    "airplay": "AirPlay",
-    "spotify": "Spotify",
-    "hdmi": "HDMI eARC",
-    "optical": "Optical",
-    "streaming": "Streaming",
-}
-
-SOURCE_REVERSE_MAP = {v: k for k, v in SOURCE_MAP.items()}
-
 SUPPORTED_FEATURES = (
     MediaPlayerEntityFeature.VOLUME_SET
     | MediaPlayerEntityFeature.VOLUME_STEP
     | MediaPlayerEntityFeature.VOLUME_MUTE
-    | MediaPlayerEntityFeature.SELECT_SOURCE
     | MediaPlayerEntityFeature.TURN_OFF
 )
 
@@ -60,7 +47,6 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
     """A media player entity for a single UniFi Play device."""
 
     _attr_name = None
-    _attr_source_list = list(SOURCE_MAP.values())
     _attr_supported_features = SUPPORTED_FEATURES
 
     def __init__(
@@ -87,10 +73,6 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
     @property
     def is_volume_muted(self) -> bool | None:
         return self._device_state.muted
-
-    @property
-    def source(self) -> str | None:
-        return SOURCE_MAP.get(self._device_state.source, self._device_state.source)
 
     @property
     def media_title(self) -> str | None:
@@ -143,12 +125,6 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
         client = self._mqtt()
         if client:
             client.set_volume(new_vol)
-
-    async def async_select_source(self, source: str) -> None:
-        api_source = SOURCE_REVERSE_MAP.get(source, source)
-        client = self._mqtt()
-        if client:
-            client.set_source(api_source)
 
     async def async_turn_off(self) -> None:
         client = self._mqtt()

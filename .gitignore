@@ -7,3 +7,4 @@ build/
 *.apk
 .DS_Store
 *.log
+.env

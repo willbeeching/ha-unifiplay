@@ -3,47 +3,17 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
-from dataclasses import dataclass
 
-from homeassistant.components.text import TextEntity, TextEntityDescription
+from homeassistant.components.text import TextEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
+from .coordinator import UnifiPlayCoordinator
 from .entity import UnifiPlayEntity
 
-HEX_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
-
-
-@dataclass(frozen=True, kw_only=True)
-class UnifiPlayTextDescription(TextEntityDescription):
-    """Describes a UniFi Play text entity."""
-
-    value_fn: Callable[[UnifiPlayDeviceState], str | None]
-    set_fn: str
-
-
-TEXTS: tuple[UnifiPlayTextDescription, ...] = (
-    UnifiPlayTextDescription(
-        key="led_color",
-        translation_key="led_color",
-        name="LED Color",
-        icon="mdi:palette",
-        value_fn=lambda s: s.led_color,
-        set_fn="set_led_color",
-    ),
-    UnifiPlayTextDescription(
-        key="screen_color",
-        translation_key="screen_color",
-        name="Screen Color",
-        icon="mdi:palette",
-        value_fn=lambda s: s.screen_color,
-        set_fn="set_screen_color",
-    ),
-)
+HEX_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
 
 
 async def async_setup_entry(
@@ -53,36 +23,37 @@ async def async_setup_entry(
 ) -> None:
     """Set up UniFi Play text entities."""
     coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[UnifiPlayText] = []
+    entities: list[UnifiPlayLedColorText] = []
     for device_id in coordinator.data:
-        for desc in TEXTS:
-            entities.append(UnifiPlayText(coordinator, device_id, desc))
+        entities.append(UnifiPlayLedColorText(coordinator, device_id))
     async_add_entities(entities)
 
 
-class UnifiPlayText(UnifiPlayEntity, TextEntity):
-    """A text entity for a UniFi Play device color setting."""
+class UnifiPlayLedColorText(UnifiPlayEntity, TextEntity):
+    """Text entity for setting LED/screen color as a hex string."""
 
-    entity_description: UnifiPlayTextDescription
+    _attr_name = "LED Color"
+    _attr_icon = "mdi:palette"
+    _attr_native_min = 6
+    _attr_native_max = 6
     _attr_pattern = r"[0-9A-Fa-f]{6}"
 
     def __init__(
         self,
         coordinator: UnifiPlayCoordinator,
         device_id: str,
-        description: UnifiPlayTextDescription,
     ) -> None:
         super().__init__(coordinator, device_id)
-        self.entity_description = description
-        self._attr_unique_id = f"unifi_play_{self._device_state.mac}_{description.key}"
+        self._attr_unique_id = f"unifi_play_{self._device_state.mac}_led_color"
 
     @property
     def native_value(self) -> str | None:
-        return self.entity_description.value_fn(self._device_state)
+        return self._device_state.led_color or None
 
     async def async_set_value(self, value: str) -> None:
-        if not HEX_COLOR_RE.match(value):
+        value = value.lstrip("#").upper()
+        if not HEX_RE.match(value):
             return
         client = self._mqtt()
         if client:
-            getattr(client, self.entity_description.set_fn)(value.upper())
+            client.set_led_color(value)

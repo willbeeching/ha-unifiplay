@@ -43,7 +43,6 @@ class UnifiPlayDeviceState:
         self.led_color: str = "0000FF"
         self.channels: int = 0
         self.persistent_dashboard: bool = False
-        self.dolby_atmos: bool = False
         self.eq_preset: str = "custom"
         self.sub_crossover: int = 85
         self.sub_level: int = 3
@@ -96,10 +95,8 @@ class UnifiPlayDeviceState:
 
     def update_from_equalizer(self, body: dict) -> None:
         """Update EQ state from an MQTT 'equalizer' event."""
-        if "dolby_atmos" in body:
-            self.dolby_atmos = body["dolby_atmos"]
-        if "eq_preset" in body:
-            self.eq_preset = body["eq_preset"]
+        if "active_profile" in body:
+            self.eq_preset = body["active_profile"]
         if "eq_enable" in body:
             self.eq_enable = body["eq_enable"]
 

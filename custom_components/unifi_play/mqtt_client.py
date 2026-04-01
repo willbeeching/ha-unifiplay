@@ -188,15 +188,11 @@ class UnifiPlayMqttClient:
 
     def request_info(self) -> None:
         """Request current device info."""
-        self.publish_action("get_info")
+        self.publish_action("info")
 
     def set_volume(self, volume: int) -> None:
         """Set volume (0-100)."""
         self.publish_action("set_volume", {"volume": volume, "info_sync": True})
-
-    def set_source(self, source: str) -> None:
-        """Set audio source."""
-        self.publish_action("select_audio_source", {"select_audio_source": source})
 
     def set_mute(self, mute: bool, restore_volume: int = 20) -> None:
         """Mute or unmute. Restores to restore_volume when unmuting."""
@@ -207,60 +203,29 @@ class UnifiPlayMqttClient:
                 "set_volume", {"volume": restore_volume, "info_sync": True}
             )
 
+    def set_source(self, source: str) -> None:
+        """Set audio input source (streaming, lineIn, spdif, usb, speakers)."""
+        self.publish_action("set_audio_src", {"source": source})
+
     def set_loudness(self, enabled: bool) -> None:
-        """Enable or disable loudness."""
-        self.publish_action("set_volume", {"loudness": enabled, "info_sync": True})
-
-    def set_eq_enable(self, enabled: bool) -> None:
-        """Enable or disable equalizer."""
-        self.publish_action("set_equalizer", {"eq_enable": enabled, "info_sync": True})
-
-    def set_subwoofer(self, enabled: bool) -> None:
-        """Enable or disable subwoofer output."""
-        self.publish_action("set_sub_audio", {"subwoofer": enabled, "info_sync": True})
+        """Enable or disable Dynamic Boost (loudness)."""
+        self.publish_action("set_loudness", {"loudness": enabled})
 
     def set_balance(self, balance: int) -> None:
         """Set stereo balance (-100 to 100)."""
-        self.publish_action("set_volume", {"balance": balance, "info_sync": True})
+        self.publish_action("set_balance", {"balance": balance, "info_sync": True})
 
     def set_vol_limit(self, limit: int) -> None:
         """Set maximum volume (0-100)."""
-        self.publish_action("set_vol_limit", {"vol_limit": limit, "info_sync": True})
+        self.publish_action("set_vol_limit", {"percentage": limit, "info_sync": True})
 
-    def set_screen_brightness(self, brightness: int) -> None:
-        """Set screen brightness (0-100)."""
-        self.publish_action(
-            "set_screen_brightness",
-            {"screen_brightness": brightness, "info_sync": True},
-        )
-
-    def set_led_brightness(self, brightness: int) -> None:
-        """Set LED brightness (0-100)."""
-        self.publish_action(
-            "set_screen_brightness",
-            {"led_brightness": brightness, "info_sync": True},
-        )
-
-    def set_dolby_atmos(self, enabled: bool) -> None:
-        """Enable or disable Dolby Atmos."""
-        self.publish_action(
-            "set_equalizer", {"dolby_atmos": enabled, "info_sync": True}
-        )
-
-    def set_persistent_dashboard(self, enabled: bool) -> None:
-        """Enable or disable persistent dashboard display."""
-        self.publish_action(
-            "set_screen_brightness",
-            {"persistent_dashboard": enabled, "info_sync": True},
-        )
+    def set_eq_enable(self, enabled: bool) -> None:
+        """Enable or disable equalizer."""
+        self.publish_action("set_eq_enable", {"enable": enabled})
 
     def set_eq_preset(self, preset: str) -> None:
-        """Set EQ preset (custom, music, movie, night)."""
-        self.publish_action("set_equalizer", {"eq_preset": preset, "info_sync": True})
-
-    def set_channels(self, channels: int) -> None:
-        """Set channel mode (0=stereo, 1=mono)."""
-        self.publish_action("set_volume", {"channels": channels, "info_sync": True})
+        """Set EQ preset (custom, music, movie, night, off)."""
+        self.publish_action("set_equalizer", {"profile": preset, "info_sync": True})
 
     def set_sub_crossover(self, crossover: int) -> None:
         """Set subwoofer crossover frequency in Hz."""
@@ -276,18 +241,32 @@ class UnifiPlayMqttClient:
         """Set subwoofer phase (0 or 180)."""
         self.publish_action("set_sub_audio", {"phase": phase, "info_sync": True})
 
-    def set_led_color(self, color: str) -> None:
-        """Set LED color as hex string (e.g. '0000FF')."""
+    def set_channels(self, channels: int) -> None:
+        """Set channel mode (0=stereo, 1=mono)."""
+        self.publish_action("set_channels", {"value": channels})
+
+    def set_screen_brightness(self, brightness: int) -> None:
+        """Set screen brightness (0-100)."""
         self.publish_action(
-            "set_screen_brightness",
-            {"led_color": color, "info_sync": True},
+            "set_screen_brightness", {"value": brightness, "info_sync": True}
         )
 
-    def set_screen_color(self, color: str) -> None:
-        """Set screen color as hex string (e.g. '0000FF')."""
+    def set_led_brightness(self, brightness: int) -> None:
+        """Set LED brightness (0-100)."""
         self.publish_action(
-            "set_screen_brightness",
-            {"screen_color": color, "info_sync": True},
+            "set_led_brightness", {"value": brightness, "info_sync": True}
+        )
+
+    def set_led_color(self, color: str) -> None:
+        """Set LED and screen color as hex string (e.g. '0000FF')."""
+        self.publish_action(
+            "set_color", {"screen": color, "led": color, "info_sync": True}
+        )
+
+    def set_persistent_dashboard(self, enabled: bool) -> None:
+        """Enable or disable persistent dashboard display."""
+        self.publish_action(
+            "set_persistent_dashboard", {"enable": enabled, "info_sync": True}
         )
 
     def locate(self, enable: bool = True) -> None:
@@ -296,7 +275,7 @@ class UnifiPlayMqttClient:
 
     def restart(self) -> None:
         """Reboot the device."""
-        self.publish_action("restart")
+        self.publish_action("reboot")
 
     async def disconnect(self) -> None:
         """Disconnect cleanly."""
