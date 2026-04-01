@@ -1,17 +1,19 @@
 # UniFi Play for Home Assistant
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![vibe-coded](https://img.shields.io/badge/vibe-coded-ff69b4?logo=musicbrainz&logoColor=white)](https://en.wikipedia.org/wiki/Vibe_coding)
 
 A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wall, etc.) managed by a UniFi OS Console (UDM Pro, Cloud Gateway, etc.).
 
 ## Features
 
-- **Media player entity** for each UniFi Play device
-- **Real-time state** via direct MQTT connection to devices
-- **Volume control** (set, step, mute)
-- **Source selection** (Line In, Bluetooth, AirPlay, Spotify, HDMI eARC, Optical)
-- **Now-playing metadata** (song, artist, album) when streaming
-- **Device info** (firmware, EQ, loudness, balance, volume limit)
+- **Media player** — volume, mute, source select, now-playing metadata
+- **Switches** — loudness, equalizer, subwoofer
+- **Number controls** — balance, volume limit, screen & LED brightness
+- **Buttons** — locate (flash LEDs), restart
+- **Sensors** — firmware update status
+- **Real-time state** via direct MQTT connection to each device
+- **Source selection** — Line In, Bluetooth, AirPlay, Spotify, HDMI eARC, Optical
 
 ## Requirements
 

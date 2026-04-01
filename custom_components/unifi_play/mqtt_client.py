@@ -215,6 +215,48 @@ class UnifiPlayMqttClient:
                 "set_volume", {"volume": restore_volume, "info_sync": True}
             )
 
+    def set_loudness(self, enabled: bool) -> None:
+        """Enable or disable loudness."""
+        self.publish_action("set_volume", {"loudness": enabled, "info_sync": True})
+
+    def set_eq_enable(self, enabled: bool) -> None:
+        """Enable or disable equalizer."""
+        self.publish_action("set_equalizer", {"eq_enable": enabled, "info_sync": True})
+
+    def set_subwoofer(self, enabled: bool) -> None:
+        """Enable or disable subwoofer output."""
+        self.publish_action("set_sub_audio", {"subwoofer": enabled, "info_sync": True})
+
+    def set_balance(self, balance: int) -> None:
+        """Set stereo balance (-100 to 100)."""
+        self.publish_action("set_volume", {"balance": balance, "info_sync": True})
+
+    def set_vol_limit(self, limit: int) -> None:
+        """Set maximum volume (0-100)."""
+        self.publish_action("set_vol_limit", {"vol_limit": limit, "info_sync": True})
+
+    def set_screen_brightness(self, brightness: int) -> None:
+        """Set screen brightness (0-100)."""
+        self.publish_action(
+            "set_screen_brightness",
+            {"screen_brightness": brightness, "info_sync": True},
+        )
+
+    def set_led_brightness(self, brightness: int) -> None:
+        """Set LED brightness (0-100)."""
+        self.publish_action(
+            "set_screen_brightness",
+            {"led_brightness": brightness, "info_sync": True},
+        )
+
+    def locate(self, enable: bool = True) -> None:
+        """Flash the device LEDs to locate it."""
+        self.publish_action("locate", {"enable": enable})
+
+    def restart(self) -> None:
+        """Reboot the device."""
+        self.publish_action("restart")
+
     async def disconnect(self) -> None:
         """Disconnect cleanly."""
         if self._loop_task:

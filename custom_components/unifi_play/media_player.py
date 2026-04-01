@@ -12,13 +12,12 @@ from homeassistant.components.media_player import (
     MediaType,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
+from .entity import UnifiPlayEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,12 +57,9 @@ async def async_setup_entry(
     async_add_entities(entities, True)
 
 
-class UnifiPlayMediaPlayer(
-    CoordinatorEntity[UnifiPlayCoordinator], MediaPlayerEntity
-):
+class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
     """A media player entity for a single UniFi Play device."""
 
-    _attr_has_entity_name = True
     _attr_name = None
     _attr_source_list = list(SOURCE_MAP.values())
     _attr_supported_features = SUPPORTED_FEATURES
@@ -73,21 +69,8 @@ class UnifiPlayMediaPlayer(
         coordinator: UnifiPlayCoordinator,
         device_id: str,
     ) -> None:
-        super().__init__(coordinator)
-        self._device_id = device_id
-        state = self._device_state
-        self._attr_unique_id = f"unifi_play_{state.mac}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, state.mac)},
-            name=state.device_name or state.name,
-            manufacturer="Ubiquiti",
-            model=state.platform,
-            sw_version=state.firmware,
-        )
-
-    @property
-    def _device_state(self) -> UnifiPlayDeviceState:
-        return self.coordinator.data[self._device_id]
+        super().__init__(coordinator, device_id)
+        self._attr_unique_id = f"unifi_play_{self._device_state.mac}"
 
     @property
     def state(self) -> MediaPlayerState:
@@ -138,22 +121,6 @@ class UnifiPlayMediaPlayer(
         pos = self._device_state.now_playing_current
         return pos if pos > 0 else None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        ds = self._device_state
-        return {
-            "firmware": ds.firmware,
-            "eq_enabled": ds.eq_enable,
-            "loudness": ds.loudness,
-            "balance": ds.balance,
-            "volume_limit": ds.vol_limit,
-            "subwoofer": ds.subwoofer,
-            "ip_address": ds.ip,
-        }
-
-    def _mqtt(self) -> Any:
-        return self.coordinator.get_mqtt_client(self._device_id)
-
     async def async_set_volume_level(self, volume: float) -> None:
         client = self._mqtt()
         if client:
@@ -188,7 +155,3 @@ class UnifiPlayMediaPlayer(
         client = self._mqtt()
         if client:
             client.publish_action("stop")
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        self.async_write_ha_state()
