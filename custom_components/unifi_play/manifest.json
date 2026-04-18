@@ -8,5 +8,5 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/willbeeching/ha-unifiplay/issues",
   "requirements": ["paho-mqtt>=2.0.0"],
-  "version": "1.0.0"
+  "version": "1.0.1"
 }
