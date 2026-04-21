@@ -141,6 +141,21 @@ class UnifiPlayMqttClient:
         except Exception:
             _LOGGER.exception("Error parsing MQTT message from %s", self._device_ip)
 
+    def _setup_tls(self) -> None:
+        """Configure mTLS on the paho client.
+
+        Runs in an executor because paho's ``tls_set`` performs blocking
+        file I/O (reading the cert and key) and loads system trust stores.
+        """
+        assert self._client is not None
+        self._client.tls_set(
+            certfile=str(CERT_FILE),
+            keyfile=str(KEY_FILE),
+            cert_reqs=ssl.CERT_NONE,
+            tls_version=ssl.PROTOCOL_TLS_CLIENT,
+        )
+        self._client.tls_insecure_set(True)
+
     async def connect(self) -> None:
         """Connect to the device's MQTT broker."""
         self._client = mqtt.Client(
@@ -151,15 +166,9 @@ class UnifiPlayMqttClient:
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
 
-        self._client.tls_set(
-            certfile=str(CERT_FILE),
-            keyfile=str(KEY_FILE),
-            cert_reqs=ssl.CERT_NONE,
-            tls_version=ssl.PROTOCOL_TLS_CLIENT,
-        )
-        self._client.tls_insecure_set(True)
-
         loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._setup_tls)
+
         await loop.run_in_executor(
             None, self._client.connect, self._device_ip, MQTT_PORT, MQTT_KEEPALIVE
         )
