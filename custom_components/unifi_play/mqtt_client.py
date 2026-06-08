@@ -213,7 +213,7 @@ class UnifiPlayMqttClient:
             )
 
     def set_source(self, source: str) -> None:
-        """Set audio input source (streaming, lineIn, spdif, usb, speakers)."""
+        """Set audio input source (streaming, lineIn, spdif for HDMI eARC)."""
         self.publish_action("set_audio_src", {"source": source})
 
     def set_loudness(self, enabled: bool) -> None:

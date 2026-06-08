@@ -22,8 +22,22 @@ CHANNEL_REVERSE = {v: k for k, v in CHANNEL_OPTIONS.items()}
 
 EQ_PRESET_OPTIONS = ["Custom", "Music", "Movie", "Night", "Off"]
 
-SOURCE_OPTIONS = {"streaming": "Streaming", "hdmi": "HDMI eARC", "lineIn": "Line In"}
-SOURCE_REVERSE = {v: k for k, v in SOURCE_OPTIONS.items()}
+# HDMI eARC is exposed as "spdif" in the MQTT protocol (verified on UPL-AMP).
+SOURCE_DEVICE_VALUES = {
+    "streaming": "Streaming",
+    "spdif": "HDMI eARC",
+    "lineIn": "Line In",
+}
+SOURCE_ALIASES = {"hdmi": "spdif"}
+SOURCE_REVERSE = {v: k for k, v in SOURCE_DEVICE_VALUES.items()}
+
+
+def _source_display_name(device_source: str | None) -> str | None:
+    """Map a device source value to the select option label."""
+    if not device_source:
+        return None
+    canonical = SOURCE_ALIASES.get(device_source, device_source)
+    return SOURCE_DEVICE_VALUES.get(canonical)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -41,8 +55,8 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
         translation_key="audio_input",
         name="Audio Input",
         icon="mdi:audio-input-stereo-minijack",
-        options=list(SOURCE_OPTIONS.values()),
-        value_fn=lambda s: SOURCE_OPTIONS.get(s.source),
+        options=list(SOURCE_DEVICE_VALUES.values()),
+        value_fn=lambda s: _source_display_name(s.source),
         set_fn="set_source",
         convert_fn=lambda v: SOURCE_REVERSE[v],
     ),

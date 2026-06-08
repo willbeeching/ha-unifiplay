@@ -193,12 +193,12 @@ Action: `set_volume`
 
 #### Audio Source
 
-Action: `select_audio_source`
+Action: `set_audio_src`
 ```json
-{"select_audio_source": "lineIn"}
+{"source": "lineIn"}
 ```
 
-Known sources: `lineIn`, `bluetooth`, `airplay`, `spotify`, `hdmi`, `optical`.
+Known sources: `lineIn`, `bluetooth`, `airplay`, `spotify`, `spdif` (HDMI eARC), `optical`.
 
 #### Other Actions
 
