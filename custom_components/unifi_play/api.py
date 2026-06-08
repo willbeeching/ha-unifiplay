@@ -13,6 +13,16 @@ API_PATH = "/proxy/apollo/api/v1"
 NETWORK_PATH = "/proxy/network/api/s/default"
 
 
+def _normalize_host(host: str) -> str:
+    """Return a bare hostname or IP suitable for URL construction."""
+    host = host.strip().rstrip("/")
+    for prefix in ("https://", "http://"):
+        if host.lower().startswith(prefix):
+            host = host[len(prefix) :]
+            break
+    return host.split("/")[0]
+
+
 def _normalize_mac(mac: str) -> str:
     """Return MAC without separators, lowercased."""
     return mac.lower().replace(":", "").replace("-", "")
@@ -35,10 +45,15 @@ class UnifiPlayApi:
         api_key: str,
         session: aiohttp.ClientSession | None = None,
     ) -> None:
-        self._host = host.rstrip("/")
+        self._host = _normalize_host(host)
         self._api_key = api_key
         self._session = session
         self._owns_session = session is None
+
+    @property
+    def host(self) -> str:
+        """Return the normalized controller hostname or IP."""
+        return self._host
 
     @property
     def _base_url(self) -> str:
@@ -58,6 +73,7 @@ class UnifiPlayApi:
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict:
         session = await self._ensure_session()
         url = f"{self._base_url}{path}"
+        _LOGGER.debug("%s %s", method, url)
         try:
             async with session.request(
                 method, url, headers=self._headers, **kwargs
@@ -66,11 +82,19 @@ class UnifiPlayApi:
                     raise UnifiPlayAuthError("Invalid API key")
                 if resp.content_type != "application/json":
                     text = await resp.text()
+                    _LOGGER.debug(
+                        "Non-JSON response from %s: status=%s content_type=%s body=%s",
+                        url,
+                        resp.status,
+                        resp.content_type,
+                        text[:500],
+                    )
                     raise UnifiPlayApiError(
                         f"Unexpected response ({resp.status}): {text[:200]}"
                     )
                 data: dict = await resp.json()
         except aiohttp.ClientError as err:
+            _LOGGER.debug("Connection error for %s: %s", url, err)
             raise UnifiPlayApiError(f"Connection error: {err}") from err
 
         if data.get("err"):
@@ -130,13 +154,41 @@ class UnifiPlayApi:
 
     async def validate_connection(self) -> bool:
         """Validate that we can connect and authenticate."""
+        url = f"{self._base_url}/devices"
         try:
-            await self.get_devices()
-            return True
+            devices = await self.get_devices()
         except UnifiPlayAuthError:
+            _LOGGER.warning(
+                "Authentication failed for UniFi Play controller at %s (invalid API key)",
+                self._host,
+            )
             raise
-        except UnifiPlayApiError:
+        except UnifiPlayApiError as err:
+            _LOGGER.warning(
+                "Failed to connect to UniFi Play controller at %s via %s: %s",
+                self._host,
+                url,
+                err,
+            )
             return False
+        else:
+            if devices:
+                summary = ", ".join(
+                    f"{dev.get('platform', 'unknown')} ({dev.get('name', 'unnamed')})"
+                    for dev in devices
+                )
+                _LOGGER.info(
+                    "Connected to UniFi Play controller at %s, found %d device(s): %s",
+                    self._host,
+                    len(devices),
+                    summary,
+                )
+            else:
+                _LOGGER.info(
+                    "Connected to UniFi Play controller at %s, but no Play devices were returned",
+                    self._host,
+                )
+            return True
 
     async def close(self) -> None:
         """Close the session if we own it."""

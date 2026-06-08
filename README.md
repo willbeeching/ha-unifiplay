@@ -22,7 +22,7 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 ## Requirements
 
 - A UniFi OS Console (UDM Pro, UDM SE, Cloud Gateway Ultra, etc.)
-- One or more UniFi Play devices (PowerAmp, In-Wall) on the same network
+- One or more UniFi Play **hardware devices** (PowerAmp, In-Wall Port, etc.) on the same network — Play is not installed on the controller itself
 - An API key from UniFi OS Settings
 
 ## Installation
@@ -52,7 +52,7 @@ Copy the `custom_components/unifi_play` folder into your Home Assistant `config/
 
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for **UniFi Play**
-3. Enter your UniFi OS Console IP address (e.g. `10.0.0.1`) and the API key from step 1
+3. Enter your UniFi OS Console IP address or hostname only (e.g. `10.0.0.1` — do not include `https://`) and the API key from step 1
 4. Devices will be discovered automatically
 
 ## How it works
@@ -63,6 +63,25 @@ The integration uses two communication channels:
 - **MQTT** (port 8883, mTLS) directly to each device for real-time state updates and control
 
 All communication stays local on your network.
+
+## Device support
+
+| Platform | Device | Tested |
+|----------|--------|--------|
+| `UPL-AMP` | PowerAmp | Yes |
+| `UPL-PORT` | In-Wall Port | Community-reported, not hardware-tested by maintainer |
+
+Both device types use the same Apollo REST discovery and MQTT control paths. If you run into device-specific issues (for example on a Port), please include the device platform from the logs when opening an issue.
+
+## Troubleshooting
+
+If setup fails with **"Failed to connect to the controller"**:
+
+1. Enter only the controller IP or hostname (e.g. `192.168.10.1`) — do not include `https://`
+2. Check **Settings → System → Logs** for lines containing `custom_components.unifi_play`
+3. Enable debug logging: **Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging**, then retry setup and share the relevant log lines in a GitHub issue
+
+At debug level, the integration logs the exact URL requested, HTTP status, and response body when the Apollo API returns an unexpected result.
 
 ## License
 

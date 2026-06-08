@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect to UniFi Play",
-        "description": "Enter your UDM Pro (or UniFi OS Console) address and an API key.",
+        "description": "Enter your UDM Pro (or UniFi OS Console) IP address or hostname (without https://) and an API key.",
         "data": {
           "controller_host": "Controller Host",
           "api_key": "API Key"
@@ -11,7 +11,7 @@
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to the controller.",
+      "cannot_connect": "Failed to connect to the controller. Check the Home Assistant logs for details. Enable debug logging for this integration (Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging) and retry to capture more information.",
       "invalid_auth": "Invalid API key.",
       "unknown": "Unexpected error."
     },

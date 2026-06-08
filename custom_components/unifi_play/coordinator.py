@@ -154,7 +154,14 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         for dev in devices:
             dev_id = dev["id"]
             if dev_id not in self._device_states:
-                self._device_states[dev_id] = UnifiPlayDeviceState(dev)
+                state = UnifiPlayDeviceState(dev)
+                self._device_states[dev_id] = state
+                _LOGGER.info(
+                    "Discovered UniFi Play device: %s (%s) at %s",
+                    state.name,
+                    state.platform,
+                    state.ip or "unknown IP",
+                )
             ip = dev.get("ip", "")
             mac = dev.get("mac", "")
             if ip and mac and dev_id not in self._mqtt_clients:
@@ -176,7 +183,11 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             await asyncio.sleep(0.5)
             client.request_info()
         except Exception:
-            _LOGGER.exception("Failed to connect MQTT to %s (%s)", ip, mac)
+            state = self._device_states.get(device_id)
+            platform = state.platform if state else "unknown"
+            _LOGGER.exception(
+                "Failed to connect MQTT to %s (%s, %s)", ip, mac, platform
+            )
 
     def _handle_event(
         self, device_id: str, event_name: str, header: dict, body: dict

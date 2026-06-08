@@ -1,0 +1,54 @@
+name: Bug Report
+description: Report a problem with the UniFi Play integration
+title: "[Bug]: "
+labels:
+  - bug
+assignees:
+  - willbeeching
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please include relevant Home Assistant log lines from `custom_components.unifi_play`.
+        Enable debug logging via **Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging** before retrying.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce the issue?
+    validations:
+      required: true
+
+  - type: input
+    id: controller
+    attributes:
+      label: UniFi OS Console model
+      placeholder: e.g. UDM Pro, Cloud Gateway Ultra
+    validations:
+      required: false
+
+  - type: input
+    id: device
+    attributes:
+      label: Play device model
+      placeholder: e.g. UPL-AMP, UPL-PORT
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: Paste log output here (redact API keys).
+      render: shell
+    validations:
+      required: false
