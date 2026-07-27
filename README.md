@@ -75,13 +75,33 @@ Both device types use the same Apollo REST discovery and MQTT control paths. If 
 
 ## Troubleshooting
 
-If setup fails with **"Failed to connect to the controller"**:
+Setup reports a specific reason for each failure. Find your message below:
 
-1. Enter only the controller IP or hostname (e.g. `192.168.10.1`) — do not include `https://`
-2. Check **Settings → System → Logs** for lines containing `custom_components.unifi_play`
-3. Enable debug logging: **Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging**, then retry setup and share the relevant log lines in a GitHub issue
+| Message | Cause | Fix |
+|---------|-------|-----|
+| **Could not reach the console** | No HTTP response at all — wrong address, not routable from HA, or a timeout | Enter only the IP or hostname (e.g. `192.168.10.1`), without `https://`. Confirm Home Assistant can reach it. |
+| **The console rejected the API key (HTTP 401)** | Key is wrong, mistyped, or truncated | Create a fresh key under **Settings → Control Plane → API Keys** and paste it whole. |
+| **The console refused the API key (HTTP 403)** | Key is valid but not for this console, or revoked | API keys are per-console — create the key on the same console you entered. |
+| **Does not serve the UniFi Play API (HTTP 404)** | The console answered, but there is no Apollo API at `/proxy/apollo/api/v1` | Check you have Play hardware adopted, and that you're pointing at the console that adopted it — not another console on the network. |
 
-At debug level, the integration logs the exact URL requested, HTTP status, and response body when the Apollo API returns an unexpected result.
+Setup succeeds but no devices appear? The API answered with an empty list, so
+your address and key are fine — there is just no Play hardware adopted on that
+console. The logs will show `returned no Play devices`. Adopt your hardware and
+the devices will be picked up on the next refresh.
+
+To check the API by hand from any machine that can reach the console:
+
+```bash
+curl -k -sS -i \
+  -H "X-API-KEY: YOUR_KEY_HERE" \
+  -H "Accept: application/json" \
+  "https://192.168.10.1/proxy/apollo/api/v1/devices"
+```
+
+The status line tells you which row above applies. Note the header must be
+`X-API-KEY: <key>` — `curl` silently ignores a `-H` value with no colon in it.
+
+For anything else, enable debug logging (**Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging**), retry setup, and share lines containing `custom_components.unifi_play` in a GitHub issue (redact your API key). At debug level the integration logs the exact URL requested, HTTP status, and response body.
 
 ## License
 

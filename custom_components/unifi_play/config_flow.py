@@ -8,7 +8,13 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 
-from .api import UnifiPlayApi, UnifiPlayApiError, UnifiPlayAuthError
+from .api import (
+    UnifiPlayApi,
+    UnifiPlayApiError,
+    UnifiPlayAuthError,
+    UnifiPlayForbiddenError,
+    UnifiPlayServiceUnavailableError,
+)
 from .const import CONF_API_KEY, CONF_CONTROLLER_HOST, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,19 +49,22 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
 
             try:
-                if not await api.validate_connection():
-                    _LOGGER.warning(
-                        "UniFi Play setup failed for controller %s. "
-                        "Enable debug logging for this integration and retry to "
-                        "capture request details in the Home Assistant logs.",
-                        normalized_host,
-                    )
-                    errors["base"] = "cannot_connect"
+                # An empty device list is not a setup failure: the API
+                # answered, so host and key are good. api.validate_connection
+                # logs a warning and we create the entry anyway, so adding the
+                # integration before adopting hardware still works.
+                await api.validate_connection()
             except UnifiPlayAuthError:
                 errors["base"] = "invalid_auth"
+            except UnifiPlayForbiddenError:
+                errors["base"] = "forbidden"
+            except UnifiPlayServiceUnavailableError:
+                errors["base"] = "apollo_unavailable"
             except UnifiPlayApiError as err:
                 _LOGGER.warning(
-                    "UniFi Play setup failed for controller %s: %s",
+                    "UniFi Play setup failed for controller %s: %s. "
+                    "Enable debug logging for this integration and retry to "
+                    "capture request details in the Home Assistant logs.",
                     normalized_host,
                     err,
                 )

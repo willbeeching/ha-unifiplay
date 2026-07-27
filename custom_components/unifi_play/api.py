@@ -33,7 +33,42 @@ class UnifiPlayApiError(Exception):
 
 
 class UnifiPlayAuthError(UnifiPlayApiError):
-    """Authentication error."""
+    """Authentication error (HTTP 401) — the API key was not accepted."""
+
+
+class UnifiPlayForbiddenError(UnifiPlayApiError):
+    """The controller refused the request (HTTP 403).
+
+    Usually means the API key is valid but was created on a different
+    console, has been revoked, or lacks access to the Apollo API.
+    """
+
+
+class UnifiPlayServiceUnavailableError(UnifiPlayApiError):
+    """The controller has no Apollo (Play) API at the expected path (HTTP 404).
+
+    The host answered, so it is reachable and TLS worked, but nothing is
+    served under ``/proxy/apollo/api/v1``.
+    """
+
+
+class UnifiPlayConnectionError(UnifiPlayApiError):
+    """The controller could not be reached at all (DNS, TCP, TLS, timeout)."""
+
+
+def _status_error(status: int, url: str) -> UnifiPlayApiError:
+    """Return the specific error for an HTTP status worth diagnosing."""
+    if status == 401:
+        return UnifiPlayAuthError("Invalid API key")
+    if status == 403:
+        return UnifiPlayForbiddenError(
+            "Controller refused the API key (HTTP 403). Check the key was "
+            "created on this console and has not been revoked."
+        )
+    return UnifiPlayServiceUnavailableError(
+        f"No UniFi Play (Apollo) API found at {url} (HTTP 404). Check that "
+        "Play hardware is adopted on this console."
+    )
 
 
 class UnifiPlayApi:
@@ -78,8 +113,19 @@ class UnifiPlayApi:
             async with session.request(
                 method, url, headers=self._headers, **kwargs
             ) as resp:
-                if resp.status == 401:
-                    raise UnifiPlayAuthError("Invalid API key")
+                if resp.status in (401, 403, 404):
+                    # These statuses each point at a distinct, fixable cause,
+                    # so log the body and raise a specific error rather than
+                    # collapsing them into a generic connection failure.
+                    text = await resp.text()
+                    _LOGGER.debug(
+                        "HTTP %s from %s: content_type=%s body=%s",
+                        resp.status,
+                        url,
+                        resp.content_type,
+                        text[:500],
+                    )
+                    raise _status_error(resp.status, url)
                 if resp.content_type != "application/json":
                     text = await resp.text()
                     _LOGGER.debug(
@@ -93,9 +139,9 @@ class UnifiPlayApi:
                         f"Unexpected response ({resp.status}): {text[:200]}"
                     )
                 data: dict = await resp.json()
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, TimeoutError) as err:
             _LOGGER.debug("Connection error for %s: %s", url, err)
-            raise UnifiPlayApiError(f"Connection error: {err}") from err
+            raise UnifiPlayConnectionError(f"Connection error: {err}") from err
 
         if data.get("err"):
             msg = data["err"].get("msg", "Unknown error")
@@ -152,8 +198,12 @@ class UnifiPlayApi:
                 ip_map[mac] = ip
         return ip_map
 
-    async def validate_connection(self) -> bool:
-        """Validate that we can connect and authenticate."""
+    async def validate_connection(self) -> list[dict]:
+        """Return the discovered devices, or raise a specific error.
+
+        Failures are re-raised rather than flattened into a boolean so the
+        config flow can map each cause to its own actionable message.
+        """
         url = f"{self._base_url}/devices"
         try:
             devices = await self.get_devices()
@@ -170,7 +220,7 @@ class UnifiPlayApi:
                 url,
                 err,
             )
-            return False
+            raise
         else:
             if devices:
                 summary = ", ".join(
@@ -184,11 +234,12 @@ class UnifiPlayApi:
                     summary,
                 )
             else:
-                _LOGGER.info(
-                    "Connected to UniFi Play controller at %s, but no Play devices were returned",
+                _LOGGER.warning(
+                    "Connected to the UniFi Play API at %s, but it returned no "
+                    "Play devices. Adopt your Play hardware on this console first",
                     self._host,
                 )
-            return True
+            return devices
 
     async def close(self) -> None:
         """Close the session if we own it."""
