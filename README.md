@@ -80,14 +80,16 @@ Setup reports a specific reason for each failure. Find your message below:
 | Message | Cause | Fix |
 |---------|-------|-----|
 | **Could not reach the console** | No HTTP response at all — wrong address, not routable from HA, or a timeout | Enter only the IP or hostname (e.g. `192.168.10.1`), without `https://`. Confirm Home Assistant can reach it. |
-| **The console rejected the API key (HTTP 401)** | Key is wrong, mistyped, or truncated | Create a fresh key under **Settings → Control Plane → API Keys** and paste it whole. |
+| **The console rejected the request (HTTP 401)** | Key is wrong or truncated — *or* the console has no Play service running behind the proxy path yet | Paste a fresh key from **Settings → Control Plane → API Keys**. If the key is definitely right and you have only just adopted your Play hardware, reboot the console: the Apollo route does not appear until the console's services reload. |
 | **The console refused the API key (HTTP 403)** | Key is valid but not for this console, or revoked | API keys are per-console — create the key on the same console you entered. |
 | **Does not serve the UniFi Play API (HTTP 404)** | The console answered, but there is no Apollo API at `/proxy/apollo/api/v1` | Check you have Play hardware adopted, and that you're pointing at the console that adopted it — not another console on the network. |
 
 Setup succeeds but no devices appear? The API answered with an empty list, so
-your address and key are fine — there is just no Play hardware adopted on that
-console. The logs will show `returned no Play devices`. Adopt your hardware and
-the devices will be picked up on the next refresh.
+your address and key are fine — there is just no Play hardware visible to that
+console yet. The logs will show `returned no Play devices`. Adopt your hardware
+(rebooting the console if it does not show up) and it will be picked up within
+five minutes — the integration re-checks for newly adopted devices on that
+interval, so there is no need to reload it.
 
 To check the API by hand from any machine that can reach the console:
 

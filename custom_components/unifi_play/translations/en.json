@@ -12,7 +12,7 @@
     },
     "error": {
       "cannot_connect": "Could not reach the console. Check the IP or hostname is correct and reachable from Home Assistant, and that you entered it without https://. Enable debug logging for this integration (Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging) and retry to capture more information.",
-      "invalid_auth": "The console rejected the API key (HTTP 401). Create a key under Settings → Control Plane → API Keys on this console and try again.",
+      "invalid_auth": "The console rejected the request (HTTP 401). Either the API key is wrong — create one under Settings → Control Plane → API Keys on this console — or the console has no UniFi Play service running yet. If you have only just adopted your Play hardware, reboot the console and try again.",
       "forbidden": "The console refused the API key (HTTP 403). API keys are per-console, so check the key was created on the console you entered and has not been revoked.",
       "apollo_unavailable": "Reached the console, but it does not serve the UniFi Play API at /proxy/apollo/api/v1 (HTTP 404). Check that you have UniFi Play hardware (PowerAmp, In-Wall Port) adopted, and that this is the console managing it — not another console on your network.",
       "unknown": "Unexpected error. Check the Home Assistant logs for details."

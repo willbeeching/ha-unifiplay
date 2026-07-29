@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -12,6 +13,11 @@ from .api import UnifiPlayApi, UnifiPlayApiError
 from .mqtt_client import UnifiPlayMqttClient
 
 _LOGGER = logging.getLogger(__name__)
+
+# Device state arrives via MQTT push, so this poll exists only to pick up
+# devices adopted after setup, and to retry MQTT for devices that had no IP
+# (or an unreachable broker) on an earlier pass.
+DISCOVERY_INTERVAL = timedelta(minutes=5)
 
 
 class UnifiPlayDeviceState:
@@ -139,6 +145,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             hass,
             _LOGGER,
             name="UniFi Play",
+            update_interval=DISCOVERY_INTERVAL,
         )
         self.api = api
         self._mqtt_clients: dict[str, UnifiPlayMqttClient] = {}
@@ -186,8 +193,16 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             state = self._device_states.get(device_id)
             platform = state.platform if state else "unknown"
             _LOGGER.exception(
-                "Failed to connect MQTT to %s (%s, %s)", ip, mac, platform
+                "Failed to connect MQTT to %s (%s, %s), will retry", ip, mac, platform
             )
+            # Drop the half-built client so the next discovery poll retries.
+            # Leaving it in place would strand the device without state for as
+            # long as the config entry lives.
+            try:
+                await client.disconnect()
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Cleanup of failed MQTT client for %s failed", ip)
+            self._mqtt_clients.pop(device_id, None)
 
     def _handle_event(
         self, device_id: str, event_name: str, header: dict, body: dict
