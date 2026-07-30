@@ -21,9 +21,19 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 
 ## Requirements
 
-- A UniFi OS Console (UDM Pro, UDM SE, Cloud Gateway Ultra, etc.)
-- One or more UniFi Play **hardware devices** (PowerAmp, In-Wall Port, etc.) on the same network — Play is not installed on the controller itself
-- An API key from UniFi OS Settings
+- A UniFi OS Console that has surfaced the **UniFi Play** application. Play is not
+  something you install — the console adds it by itself once it detects Play
+  hardware on the network. That application's service (internally `apollo`) is what
+  this integration talks to, so no Play application means no API to connect to.
+- One or more UniFi Play **hardware devices** (PowerAmp, In-Wall Port, etc.) on the
+  same network as the console
+- An API key created on that same console (**Settings → Control Plane → API Keys**)
+
+> **Not every console appears to offer Play.** A Cloud Key Plus has been reported to
+> list Audio Ports in UniFi Network while never surfacing the Play application at all
+> ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)). Devices showing up in
+> UniFi Network is not the same thing as Play being available. If the API returns 401
+> on your console, this is the most likely reason.
 
 ## Installation
 
@@ -80,7 +90,7 @@ Setup reports a specific reason for each failure. Find your message below:
 | Message | Cause | Fix |
 |---------|-------|-----|
 | **Could not reach the console** | No HTTP response at all — wrong address, not routable from HA, or a timeout | Enter only the IP or hostname (e.g. `192.168.10.1`), without `https://`. Confirm Home Assistant can reach it. |
-| **The console rejected the request (HTTP 401)** | Key is wrong or truncated — *or* the console has no Play service running behind the proxy path yet | Paste a fresh key from **Settings → Control Plane → API Keys**. If the key is definitely right and you have only just adopted your Play hardware, reboot the console: the Apollo route does not appear until the console's services reload. |
+| **The console rejected the request (HTTP 401)** | Key is wrong or truncated — *or* the console has not surfaced the Play application, so there is no service behind the proxy path | Paste a fresh key from **Settings → Control Plane → API Keys**. If the key is definitely right, check the console shows a **UniFi Play** section at all; if you have only just put Play hardware on the network, reboot the console so it can detect it. See Requirements above — some consoles never surface Play. |
 | **The console refused the API key (HTTP 403)** | Key is valid but not for this console, or revoked | API keys are per-console — create the key on the same console you entered. |
 | **Does not serve the UniFi Play API (HTTP 404)** | The console answered, but there is no Apollo API at `/proxy/apollo/api/v1` | Check you have Play hardware adopted, and that you're pointing at the console that adopted it — not another console on the network. |
 
