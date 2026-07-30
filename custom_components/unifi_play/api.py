@@ -33,7 +33,12 @@ class UnifiPlayApiError(Exception):
 
 
 class UnifiPlayAuthError(UnifiPlayApiError):
-    """Authentication error (HTTP 401) — the API key was not accepted."""
+    """Authentication error (HTTP 401) — the API key was not accepted.
+
+    Note that a 401 proves the Apollo application *is* installed: UniFi OS
+    only reaches its auth layer for a proxy path that actually has an
+    application behind it.
+    """
 
 
 class UnifiPlayForbiddenError(UnifiPlayApiError):
@@ -45,10 +50,22 @@ class UnifiPlayForbiddenError(UnifiPlayApiError):
 
 
 class UnifiPlayServiceUnavailableError(UnifiPlayApiError):
-    """The controller has no Apollo (Play) API at the expected path (HTTP 404).
+    """This console has no Apollo (UniFi Play) application installed.
 
-    The host answered, so it is reachable and TLS worked, but nothing is
-    served under ``/proxy/apollo/api/v1``.
+    UniFi OS writes an nginx route for ``/proxy/<app>`` only for applications
+    it has installed. With no Apollo application the request falls through to
+    the UniFi OS single-page-app catch-all, which answers ``200`` with an HTML
+    body — regardless of whether the API key is valid. So HTML is the signal,
+    not the status code.
+    """
+
+
+class UnifiPlayUnsupportedApiError(UnifiPlayApiError):
+    """Apollo answered, but has no handler at the path we requested (HTTP 404).
+
+    Apollo itself returns a plain-text 404 for an unknown path, which is
+    distinct from the HTML catch-all above. This means the application is
+    installed but does not expose the endpoint this integration expects.
     """
 
 
@@ -59,15 +76,18 @@ class UnifiPlayConnectionError(UnifiPlayApiError):
 def _status_error(status: int, url: str) -> UnifiPlayApiError:
     """Return the specific error for an HTTP status worth diagnosing."""
     if status == 401:
-        return UnifiPlayAuthError("Invalid API key")
+        return UnifiPlayAuthError(
+            "Apollo rejected the API key (HTTP 401). The Apollo application is "
+            "installed on this console, so this is a credential problem."
+        )
     if status == 403:
         return UnifiPlayForbiddenError(
             "Controller refused the API key (HTTP 403). Check the key was "
             "created on this console and has not been revoked."
         )
-    return UnifiPlayServiceUnavailableError(
-        f"No UniFi Play (Apollo) API found at {url} (HTTP 404). Check that "
-        "Play hardware is adopted on this console."
+    return UnifiPlayUnsupportedApiError(
+        f"Apollo has no handler for {url} (HTTP 404). The application is "
+        "installed but does not expose the expected API path."
     )
 
 
@@ -113,6 +133,24 @@ class UnifiPlayApi:
             async with session.request(
                 method, url, headers=self._headers, **kwargs
             ) as resp:
+                if resp.content_type == "text/html":
+                    # No Apollo application on this console: UniFi OS has no
+                    # nginx route for /proxy/apollo, so the request falls
+                    # through to its single-page-app catch-all and answers 200
+                    # with HTML. This happens whether or not the key is valid,
+                    # so it must be detected before any status check - a 200
+                    # here would otherwise look like success.
+                    _LOGGER.debug(
+                        "HTML response from %s (status=%s): no Apollo "
+                        "application on this console",
+                        url,
+                        resp.status,
+                    )
+                    raise UnifiPlayServiceUnavailableError(
+                        "This console has no Apollo (UniFi Play) application. "
+                        "It is installed automatically when a UniFi Play "
+                        "device is discovered by the console."
+                    )
                 if resp.status in (401, 403, 404):
                     # These statuses each point at a distinct, fixable cause,
                     # so log the body and raise a specific error rather than
@@ -187,8 +225,13 @@ class UnifiPlayApi:
                 if resp.status != 200:
                     raise UnifiPlayApiError(f"Network API status {resp.status}")
                 data: dict = await resp.json(content_type=None)
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, TimeoutError) as err:
             raise UnifiPlayApiError(f"Network API error: {err}") from err
+        except ValueError as err:
+            # A console without the Network application serves the UniFi OS
+            # HTML shell here with status 200, so parsing can fail even though
+            # the request "succeeded". IP enrichment is best-effort either way.
+            raise UnifiPlayApiError(f"Network API returned non-JSON: {err}") from err
 
         ip_map: dict[str, str] = {}
         for client in data.get("data") or []:

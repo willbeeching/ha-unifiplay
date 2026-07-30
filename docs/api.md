@@ -1,6 +1,42 @@
 # UniFi Play / Apollo API Reference
 
 Reverse-engineered from the UniFi Play Android app v2.0.0 and live device testing.
+REST details verified against Apollo `0.7.4` on UDM-Pro firmware `5.1.26`
+(unifi-core `5.1.126`, uos `5.1.4`).
+
+## Where the API comes from
+
+`Apollo` is Ubiquiti's product-line name for UniFi Play, and the name of the UniFi OS
+application that manages it. On the console it is a Debian package (`apollo`) run by
+systemd as the `apollo` user, listening on **loopback only** (`127.0.0.1:19880`).
+
+UniFi OS's application catalogue at
+`/usr/share/unifi-core/app/config/default.yaml` marks it:
+
+```yaml
+apollo:
+  packageName: 'apollo'
+  serviceName: 'apollo'
+  ports: { http: { api: 19880 } }
+  displayName: 'Apollo'
+  installOnDeviceDiscovery: true
+```
+
+`installOnDeviceDiscovery` is why nobody installs Apollo by hand — and Apollo is the
+only application in the catalogue that carries the flag. Discovering a device from the
+Apollo hardware line (`UPL-Amp-B/W` PowerAmp, `UPL-Port-B/W` Play Audio Port) causes
+the console to download and install the package. `unifi-core` then writes
+`/data/unifi-core/config/http/shared-runnable-apollo.conf` and reloads nginx, which is
+what makes `/proxy/apollo/` exist.
+
+**Consequence for clients:** no Apollo application means no `location /proxy/apollo/`
+block, so requests hit the UniFi OS single-page-app catch-all and return **`200` with
+an HTML body** — not 404, and regardless of credentials. See
+[Distinguishing failures](#distinguishing-failures).
+
+Per-model support is tracked in `/data/unifi-core/config/consoleGroup.yaml` under
+`applications:`; an `apollo: supported: false` there would mean that console can never
+run Apollo.
 
 ## Architecture
 
@@ -34,7 +70,28 @@ Base URL: `https://{udm_ip}/proxy/apollo/api/v1/`
 
 Header: `X-API-KEY: {api_key}`
 
-The API key is generated in UniFi OS Settings.
+The API key is generated in UniFi OS Settings (**Control Plane → API Keys**) and is
+per-console. The nginx location block for `/proxy/apollo/` includes
+`auth.conf`, which resolves API keys via an `auth_request` subrequest and forwards
+`X-ApiKeyId` upstream — so API keys are a first-class credential for this path (unlike
+some `/api/*` routes, which accept only a session cookie).
+
+`/proxy/apollo/public/` is routed without `auth.conf`, i.e. unauthenticated, though it
+returns 404 on Apollo 0.7.4.
+
+### Distinguishing failures
+
+Status code alone is ambiguous. Branch on content type:
+
+| Response | Meaning |
+|----------|---------|
+| `200` + `application/json` | Apollo installed, key accepted |
+| `200` + `text/html` | **No Apollo application on this console** — nginx SPA fallback. Happens with a valid key too |
+| `401` + `application/json` | Route exists, so Apollo *is* installed; credential rejected |
+| `403` + `application/json` | Key not valid for this console, or revoked |
+| `404` + `text/plain` | Apollo's own Go 404 — installed, but no handler at that path |
+
+A `resp.ok`-style check will sail past the HTML case and then fail on JSON decode.
 
 ### Endpoints
 
@@ -79,9 +136,40 @@ Lists all known Play devices.
 
 > **Note:** REST state data may be stale. Use MQTT for real-time state.
 
+Observed `state` values: `MANAGED_BY_OTHER` (device present in this console's list but
+owned elsewhere — e.g. managed from the Play mobile app). The full set is not known, so
+do not filter devices on `state`.
+
+`extra_info.platform` and `extra_info.model` are empty strings in practice — use the
+top-level `platform` field instead.
+
 #### GET /groups
 
-Lists speaker groups. Returns `{ data: null }` when no groups exist.
+Lists speaker groups. Returns `data: null` — not `[]` — when no groups exist, so
+null-guard it.
+
+#### GET /info
+
+Health and version. Cheap, and a better connectivity probe than fetching all devices.
+
+```json
+{
+  "err": null,
+  "type": "single",
+  "data": {
+    "status": "up",
+    "host": "<console-hostname>",
+    "build": { "build_time": "2024-10-15T06:52:00Z", "go_ver": "go1.22.3",
+               "go_arch": "arm64", "go_os": "linux" },
+    "vcs": { "version": "v0.7.4", "commit": "…", "modified": "false" },
+    "fw_build": false
+  }
+}
+```
+
+#### Paths that do not exist
+
+`/system`, `/version`, and `/` all return `404 text/plain` on Apollo 0.7.4.
 
 #### PATCH /devices/{id}
 

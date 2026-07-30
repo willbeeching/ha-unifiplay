@@ -12,9 +12,10 @@
     },
     "error": {
       "cannot_connect": "Could not reach the console. Check the IP or hostname is correct and reachable from Home Assistant, and that you entered it without https://. Enable debug logging for this integration (Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging) and retry to capture more information.",
-      "invalid_auth": "The console rejected the request (HTTP 401). Either the API key is wrong — create one under Settings → Control Plane → API Keys on this console — or this console has not surfaced the UniFi Play application, so there is no Play service to talk to. Check the console shows a UniFi Play section; if you have only just put Play hardware on the network, reboot the console so it can detect it.",
+      "invalid_auth": "The console rejected the API key (HTTP 401). The Apollo application is installed, so this is purely a credential problem — create a new key under Settings → Control Plane → API Keys on this console and paste it whole.",
       "forbidden": "The console refused the API key (HTTP 403). API keys are per-console, so check the key was created on the console you entered and has not been revoked.",
-      "apollo_unavailable": "Reached the console, but it does not serve the UniFi Play API at /proxy/apollo/api/v1 (HTTP 404). Check that you have UniFi Play hardware (PowerAmp, In-Wall Port) adopted, and that this is the console managing it — not another console on your network.",
+      "apollo_unavailable": "This console has no Apollo application, which is what serves the UniFi Play API. Apollo installs itself automatically when the console discovers UniFi Play hardware (PowerAmp or Play Audio Port) — look for an Apollo section in UniFi OS. If your Play devices are managed by a different console, point this integration at that one instead.",
+      "unsupported_api": "The Apollo application answered but has no device API at the expected path. Your Apollo version may be newer or older than this integration supports — please open an issue including your console firmware and Apollo version.",
       "unknown": "Unexpected error. Check the Home Assistant logs for details."
     },
     "abort": {

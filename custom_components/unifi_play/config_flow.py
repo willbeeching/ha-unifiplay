@@ -14,6 +14,7 @@ from .api import (
     UnifiPlayAuthError,
     UnifiPlayForbiddenError,
     UnifiPlayServiceUnavailableError,
+    UnifiPlayUnsupportedApiError,
 )
 from .const import CONF_API_KEY, CONF_CONTROLLER_HOST, DOMAIN
 
@@ -60,6 +61,8 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "forbidden"
             except UnifiPlayServiceUnavailableError:
                 errors["base"] = "apollo_unavailable"
+            except UnifiPlayUnsupportedApiError:
+                errors["base"] = "unsupported_api"
             except UnifiPlayApiError as err:
                 _LOGGER.warning(
                     "UniFi Play setup failed for controller %s: %s. "

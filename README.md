@@ -21,19 +21,28 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 
 ## Requirements
 
-- A UniFi OS Console that has surfaced the **UniFi Play** application. Play is not
-  something you install — the console adds it by itself once it detects Play
-  hardware on the network. That application's service (internally `apollo`) is what
-  this integration talks to, so no Play application means no API to connect to.
-- One or more UniFi Play **hardware devices** (PowerAmp, In-Wall Port, etc.) on the
-  same network as the console
+- A UniFi OS Console running the **Apollo** application. This is the part people get
+  stuck on, so in detail:
+  - `Apollo` is Ubiquiti's name for the UniFi Play product line, and the application
+    that manages it. In UniFi OS the section is labelled **Apollo**, not "UniFi Play"
+    — only the hardware is branded Play. It serves the `/proxy/apollo/api/v1/` API
+    this integration uses.
+  - You never install it yourself. It is a real, separately versioned package that the
+    console downloads and installs **automatically when it discovers UniFi Play
+    hardware**, then keeps up to date on its own schedule.
+  - So a console that has never seen a Play device has no Apollo application, and
+    therefore no API to connect to.
+- One or more UniFi Play **hardware devices** (PowerAmp, Play Audio Port) discovered by
+  that console
 - An API key created on that same console (**Settings → Control Plane → API Keys**)
 
-> **Not every console appears to offer Play.** A Cloud Key Plus has been reported to
-> list Audio Ports in UniFi Network while never surfacing the Play application at all
-> ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)). Devices showing up in
-> UniFi Network is not the same thing as Play being available. If the API returns 401
-> on your console, this is the most likely reason.
+> **Not every console appears to offer Apollo.** A Cloud Key Plus has been reported
+> listing five Audio Ports in UniFi Network while never gaining an Apollo application
+> ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)) — devices showing up in
+> UniFi Network is not the same thing as Apollo being available. UniFi OS tracks this
+> per model, so if you have console access you can check yours:
+> `grep -A10 'applications:' /data/unifi-core/config/consoleGroup.yaml` and look for
+> `apollo: { ... supported: true }`.
 
 ## Installation
 
@@ -90,9 +99,10 @@ Setup reports a specific reason for each failure. Find your message below:
 | Message | Cause | Fix |
 |---------|-------|-----|
 | **Could not reach the console** | No HTTP response at all — wrong address, not routable from HA, or a timeout | Enter only the IP or hostname (e.g. `192.168.10.1`), without `https://`. Confirm Home Assistant can reach it. |
-| **The console rejected the request (HTTP 401)** | Key is wrong or truncated — *or* the console has not surfaced the Play application, so there is no service behind the proxy path | Paste a fresh key from **Settings → Control Plane → API Keys**. If the key is definitely right, check the console shows a **UniFi Play** section at all; if you have only just put Play hardware on the network, reboot the console so it can detect it. See Requirements above — some consoles never surface Play. |
+| **The console rejected the API key (HTTP 401)** | Purely a credential problem. A 401 means the Apollo route exists and its auth layer turned you away — so Apollo *is* installed | Paste a fresh key from **Settings → Control Plane → API Keys** on this console, whole and untruncated. |
 | **The console refused the API key (HTTP 403)** | Key is valid but not for this console, or revoked | API keys are per-console — create the key on the same console you entered. |
-| **Does not serve the UniFi Play API (HTTP 404)** | The console answered, but there is no Apollo API at `/proxy/apollo/api/v1` | Check you have Play hardware adopted, and that you're pointing at the console that adopted it — not another console on the network. |
+| **This console has no Apollo application** | The console answered with its web UI instead of an API, meaning no Apollo route exists | Confirm the console shows an **Apollo** section, and that it is the console that discovered your Play hardware. If the hardware is new, give the console time to discover it (a reboot forces the issue). |
+| **Apollo answered but has no device API** | Apollo is installed but does not serve the expected path — a version mismatch | Please open an issue with your console firmware and Apollo version. |
 
 Setup succeeds but no devices appear? The API answered with an empty list, so
 your address and key are fine — there is just no Play hardware visible to that
@@ -110,8 +120,20 @@ curl -k -sS -i \
   "https://192.168.10.1/proxy/apollo/api/v1/devices"
 ```
 
-The status line tells you which row above applies. Note the header must be
-`X-API-KEY: <key>` — `curl` silently ignores a `-H` value with no colon in it.
+**Read the `content-type`, not just the status line.** UniFi OS has no route for a
+proxy path whose application is not installed, so the request falls through to the web
+UI and comes back `200` with an HTML body — even with a perfectly valid key. A status
+code on its own cannot tell "Apollo missing" from "Apollo working":
+
+| Response | Meaning |
+|----------|---------|
+| `200` + `application/json` | Working. Apollo installed and the key accepted |
+| `200` + `text/html` | **No Apollo application on this console.** You are looking at the UniFi OS web UI, not an API |
+| `401` + `application/json` | Apollo *is* installed; the key was rejected |
+| `404` + `text/plain` | Apollo is installed but has no such path |
+
+Note the header must be `X-API-KEY: <key>` — `curl` silently ignores a `-H` value with
+no colon in it, which looks exactly like an auth failure.
 
 For anything else, enable debug logging (**Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging**), retry setup, and share lines containing `custom_components.unifi_play` in a GitHub issue (redact your API key). At debug level the integration logs the exact URL requested, HTTP status, and response body.
 
