@@ -93,11 +93,16 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 > [#4](https://github.com/willbeeching/ha-unifiplay/issues/4) — the table above is small
 > and every data point sharpens it.
 
-> **Devices in UniFi Network are a separate matter.** A Cloud Key Plus has been
-> reported listing five Audio Ports in UniFi Network while never gaining an Apollo
-> application. Conversely, an Apollo device in state `MANAGED_BY_OTHER` does **not**
-> appear in the Network app's device list at all, yet is fully visible to Apollo. Neither
-> list tells you whether Apollo is installed.
+> **Seeing your Play hardware in UniFi Network does not mean Apollo is installed.** A
+> Cloud Key Plus has been reported listing five Audio Ports in Network while never
+> gaining an Apollo application at all. The two are independent: Network adopting a
+> device and Apollo being present on the console are separate things.
+>
+> Play hardware does normally appear in the Network device list — reported on UDM Pro,
+> UCG-Fiber and Cloud Key Plus. So if your Play device is *missing* from Network on the
+> console you are pointing this integration at, that is worth investigating: Apollo on
+> that console will likely return an empty device list, and the integration will set up
+> with no entities.
 
 ### Checking a console over SSH
 

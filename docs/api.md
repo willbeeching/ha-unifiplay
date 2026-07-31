@@ -113,13 +113,22 @@ console *group* membership on a UCG-Fiber at `5.1.19`. Both consoles report
 firmware version is the likelier cause. Either way the file does not gate installation:
 the UDM Pro installed Apollo while `UNADOPTED` with `apollo.owned: false`.
 
-### Apollo devices need not appear in UniFi Network
+### Play devices in UniFi Network
 
-An Apollo device in state `MANAGED_BY_OTHER` is absent from the Network application's
-device list while remaining fully visible to the Apollo backend (it may show only as a
-client). The converse also occurs: a Cloud Key Plus has been reported listing five Audio
-Ports in Network with no Apollo application at all. Neither list is evidence about the
-other.
+Play hardware appears in the UniFi Network device list like any other adopted device,
+with the managing application named in an `Application` column — `Play` for `UPL Amp`
+and `UPL Port` hardware, as against `Network` or `Access` for everything else. A UDM Pro
+serving two working PowerAmps lists both as `Play` / `UPL Amp` / Online alongside its
+switches and UPS.
+
+The Apollo API's `MANAGED_BY_OTHER` device state reflects exactly that: the device is
+managed by an application *other than Network*, not hidden from it.
+
+Presence in Network is no evidence that Apollo is installed — a Cloud Key Plus has been
+reported listing five Audio Ports while having no Apollo application at all. Absence,
+however, is informative: a Play device missing from the device list of the console you
+are querying will not appear in that console's Apollo `/devices` response either, and
+the integration will set up with no entities.
 
 ## Architecture
 
