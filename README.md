@@ -32,22 +32,45 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
     hardware**, then keeps up to date on its own schedule.
   - So a console that has never seen a Play device has no Apollo application, and
     therefore no API to connect to.
+  - Discovery is necessary but may not be sufficient — see below.
 - One or more UniFi Play **hardware devices** (PowerAmp, Play Audio Port) discovered by
   that console
 - An API key created on that same console (**Settings → Control Plane → API Keys**)
 
-> **Not every console appears to offer Apollo.** A Cloud Key Plus has been reported
-> listing five Audio Ports in UniFi Network while never gaining an Apollo application,
-> and a UCG-Fiber on UniFi OS 5.1.19 shows the same: an adopted, online Audio Port but
-> no Apollo route ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)) —
-> devices showing up in UniFi Network is not the same thing as Apollo being available.
-> On a UDM Pro you can check per-model application support with
-> `grep -A10 'applications:' /data/unifi-core/config/consoleGroup.yaml` (look for
-> `apollo: { ... supported: true }`), but this does **not** carry over to UniFi OS 5.x —
-> there `consoleGroup.yaml` no longer holds the application catalogue, so an empty grep
-> proves nothing. A more portable probe is `grep -ril apollo /data/unifi-core`: matches
-> in `config/runnables.yaml` or `logs/apps.log` show the console's application manager
-> at least knows Apollo exists.
+> **Not every console installs Apollo, even after discovering Play hardware.** A
+> Cloud Key Plus has been reported listing five Audio Ports in UniFi Network while
+> never gaining an Apollo application, and a UCG-Fiber on UniFi OS 5.1.19 has an
+> adopted, online Audio Port and still no Apollo route
+> ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)). Devices appearing in
+> UniFi Network is not the same thing as Apollo being available.
+>
+> On that UCG-Fiber the console initialises an Apollo service on every boot, finds the
+> package absent, and never attempts to fetch it — a loop running unbroken for four
+> months. Its `runnables.yaml` records `apollo: beta` while every installed application
+> is on the Official release channel, which suggests Apollo is pre-release on some
+> platforms and a console tracking Official will never pull it. That is a working
+> hypothesis, not a confirmed cause.
+
+### Checking a console over SSH
+
+If you have console access, this is the reliable sequence — it distinguishes *Apollo is
+absent* from *Apollo is installed but broken*:
+
+```bash
+grep -i apollo /data/unifi-core/logs/uos.log | tail -5     # version probe result
+systemctl list-unit-files | grep -i apollo                 # is there a service at all?
+cat /data/unifi-core/config/runnables.yaml                 # release channel per app
+```
+
+`ERROR Exit with error: Package "apollo" not installed` in `uos.log`, plus no systemd
+unit, means the package has never been on the console. An install that had been
+attempted and failed would leave a download or unpack error in the same log — absence
+of those points at the console never requesting the package, rather than failing to
+install it.
+
+Note that `/data/unifi-core/config/consoleGroup.yaml` holds a per-model application
+catalogue on the UDM Pro but console *group* membership on UniFi OS 5.x, so it is not a
+portable place to check application support.
 
 ## Installation
 
@@ -106,7 +129,7 @@ Setup reports a specific reason for each failure. Find your message below:
 | **Could not reach the console** | No HTTP response at all — wrong address, not routable from HA, or a timeout | Enter only the IP or hostname (e.g. `192.168.10.1`), without `https://`. Confirm Home Assistant can reach it. |
 | **The console rejected the API key (HTTP 401)** | Purely a credential problem. A 401 means the Apollo route exists and its auth layer turned you away — so Apollo *is* installed | Paste a fresh key from **Settings → Control Plane → API Keys** on this console, whole and untruncated. |
 | **The console refused the API key (HTTP 403)** | Key is valid but not for this console, or revoked | API keys are per-console — create the key on the same console you entered. |
-| **This console has no Apollo application** | The console answered with its web UI instead of an API, meaning no Apollo route exists | Confirm the console shows an **Apollo** section, and that it is the console that discovered your Play hardware. If the hardware is new, give the console time to discover it (a reboot forces the issue). |
+| **This console has no Apollo application** | The console answered with its web UI instead of an API, meaning no Apollo route exists | Confirm the console shows an **Apollo** section, and that it is the console that discovered your Play hardware. If the hardware is new, give the console time to discover it (a reboot forces the issue). Some consoles never install Apollo despite discovering Play hardware — see [Checking a console over SSH](#checking-a-console-over-ssh). |
 | **Apollo answered but has no device API** | Apollo is installed but does not serve the expected path — a version mismatch | Please open an issue with your console firmware and Apollo version. |
 | **That address is Ubiquiti's cloud (ui.com)** | You entered `api.ui.com` or another ui.com address. That is the Site Manager cloud API — a different API that does not proxy Apollo | Enter your console's own local IP or hostname, with a key created on that console. |
 

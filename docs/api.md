@@ -36,12 +36,35 @@ an HTML body** — not 404, and regardless of credentials. See
 
 Per-model support is tracked in `/data/unifi-core/config/consoleGroup.yaml` under
 `applications:` — **on the UDM Pro, where this was observed**. An
-`apollo: supported: false` there would mean that console can never run Apollo. This
-does not port to UniFi OS 5.x: on a UCG-Fiber running 5.1.19 the file is ~113 bytes
-with no `applications:` block at all, while `apollo` still appears in
-`config/runnables.yaml` and the application logs
-([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)). Where (or whether) the
-catalogue lives on that platform is an open question.
+`apollo: supported: false` there would mean that console can never run Apollo. The file
+does not serve that purpose on UniFi OS 5.x: on a UCG-Fiber running 5.1.19 it holds
+console *group* membership instead (`self.role`, `members`), with no `applications:`
+block at all.
+
+### Discovery does not guarantee installation
+
+`installOnDeviceDiscovery` describes intent, not a guarantee. On the UCG-Fiber above,
+with an Audio Port adopted and online for six months, the console repeats this cycle on
+every boot and never installs the package
+([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)):
+
+```
+systemd.log  info: Initialize apollo service
+uos.log      INFO Getting current version of installed package package_name=apollo
+uos.log      ERROR Exit with error: Package "apollo" not installed
+apps.log     warn: Attempted to enable auto-update for apollo application but it is
+                   not installed, configured, or is not ready
+```
+
+No download, unpack, or signature error appears anywhere — the console is not failing
+to install Apollo, it is never requesting it. `systemctl list-unit-files | grep -i
+apollo` is empty on that console, confirming the package has never been present.
+
+That console's `runnables.yaml` carries `apollo: beta` while every installed
+application is on the Official release channel, suggesting Apollo is published
+pre-release on some platforms. Unconfirmed, but it fits the observed behaviour: a
+console tracking Official would never fetch a beta-channel package, however many Play
+devices it discovers.
 
 ## Architecture
 
