@@ -29,120 +29,16 @@ The integration has two connection modes, chosen at setup:
   regardless of console model, update channel, or whether you own a console at all.
   Speakers on Home Assistant's own subnet are found automatically; speakers on other
   VLANs can be listed by IP.
-- **Via a UniFi OS Console** running the **Apollo** application. Discovery goes
-  through the console's `/proxy/apollo` API; control is still direct MQTT. Only
-  choose this if your console has Apollo — and note the model gating below.
+- **Via a UniFi OS Console** running the **Apollo** application (Ubiquiti's console-side
+  name for UniFi Play — the console installs it automatically when it discovers Play
+  hardware, but only on some console models). Discovery goes through the console's
+  `/proxy/apollo` API with an API key; control is still direct MQTT.
 
-If your console never gets Apollo, you are not stuck: use direct connection.
-Everything below in this section applies to console mode only.
-
-- A UniFi OS Console running the **Apollo** application. This is the part people get
-  stuck on, so in detail:
-  - `Apollo` is Ubiquiti's name for the UniFi Play product line, and the application
-    that manages it. In UniFi OS the section is labelled **Apollo**, not "UniFi Play"
-    — only the hardware is branded Play. It serves the `/proxy/apollo/api/v1/` API
-    this integration uses.
-  - You never install it yourself. It is a real, separately versioned package that the
-    console downloads and installs **automatically when it discovers UniFi Play
-    hardware**, then keeps up to date on its own schedule.
-  - So a console that has never seen a Play device has no Apollo application, and
-    therefore no API to connect to.
-- One or more UniFi Play **hardware devices** (PowerAmp, Play Audio Port) discovered by
-  that console
-- An API key created on that same console (**Settings → Control Plane → API Keys**)
-
-> ### When a console never installs Apollo
->
-> **Apollo appears to be gated by console model.** Reported so far
-> ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)):
->
-> | Console | Channel tested | Apollo |
-> |---|---|---|
-> | UDM Pro | Early Access | Working |
-> | UDM Pro | `release-candidate` | Working |
-> | UCG-Fiber | `release`, then `beta` | Never installs |
-> | Cloud Key Plus | `beta` | Never installs |
->
-> **Changing your update channel is not a workaround — this has been tested.** Two
-> consoles were moved to `beta`, the highest tier, with Play hardware already adopted,
-> and Apollo still never installed. On one of them the switch demonstrably took effect
-> (other applications gained new version choices); Apollo simply had no package
-> available. Please don't put your gateway on pre-release firmware for this.
->
-> The cleanest evidence is a single owner's two consoles: a UDM Pro and a Cloud Key
-> Plus, both on firmware `v5.1.27`, both on non-Official channels, both with Play
-> hardware adopted. Apollo runs on the UDM Pro and is entirely absent on the Cloud Key
-> Plus. Model is the only variable left.
->
-> This is consistent with the one structural difference found between consoles: a UDM
-> Pro's `consoleGroup.yaml` carries `apollo: { required: false, owned: false, supported:
-> true }` — a per-model support flag — while a UCG-Fiber has no `applications:` block at
-> all.
->
-> So if Apollo never appears on your console, the likeliest answer is that **Ubiquiti has
-> not released it for your model**, and there is nothing to configure — **use the
-> integration's direct connection mode instead**, which does not involve the console. Note also that
-> none of this conflicts with Play being a retail product: Play hardware is driven by the
-> Play mobile app and needs no console, so Apollo's console-side rollout is independent
-> of hardware availability.
->
-> Two conditions must hold before a console fetches Apollo. Both are necessary; neither
-> has proven sufficient:
->
-> 1. **An Apollo-line device is discovered on it.** `apollo` is the only application in
->    UniFi OS's catalogue flagged `installOnDeviceDiscovery: true`, and that discovery
->    is what triggers the fetch. A UDM Pro on `release-candidate` sat for six months
->    logging `Package "apollo" not installed` every boot, then installed Apollo the day
->    an Apollo device appeared.
-> 2. **A package exists for the console to fetch** at or below its channel
->    (`releaseChannel` in `firmware.yaml`, seen in the logs as `max_release_channel`).
->    Apollo is not distributed through apt — `unifi-core` fetches the `.deb` directly
->    from Ubiquiti — so there is no repository you can add.
->
-> One caution on reading the config: `runnables.yaml`'s `releaseChannels:` map is a
-> **per-application channel preference you can change**, not a record of where Ubiquiti
-> publishes a package. Observed values for `apollo` differ across consoles (`release`,
-> `release-candidate`, `beta`) and track the owner's settings. Do not infer package
-> availability from it.
->
-> Please add your console model, channel, and whether Apollo installed to
-> [#4](https://github.com/willbeeching/ha-unifiplay/issues/4) — the table above is small
-> and every data point sharpens it.
-
-> **Seeing your Play hardware in UniFi Network does not mean Apollo is installed.** A
-> Cloud Key Plus has been reported listing five Audio Ports in Network while never
-> gaining an Apollo application at all. The two are independent: Network adopting a
-> device and Apollo being present on the console are separate things.
->
-> Play hardware does normally appear in the Network device list — reported on UDM Pro,
-> UCG-Fiber and Cloud Key Plus. So if your Play device is *missing* from Network on the
-> console you are pointing this integration at, that is worth investigating: Apollo on
-> that console will likely return an empty device list, and the integration will set up
-> with no entities.
-
-### Checking a console over SSH
-
-If you have console access, this sequence distinguishes *Apollo was never fetched* from
-*Apollo is installed but broken*:
-
-```bash
-ps auxwww | grep -i apollo                                     # is it running at all?
-systemctl list-unit-files | grep -i apollo                     # is there a service?
-grep -i apollo /data/unifi-core/logs/uos.log | tail -5         # fetch or version probe
-grep -i releaseChannel /data/unifi-core/config/firmware.yaml   # for the record
-```
-
-`ERROR Exit with error: Package "apollo" not installed` in `uos.log`, plus no systemd
-unit and no process, means the package has never been on the console. Look for whether a
-`Start to download package package_name=apollo` line appears anywhere in that log: its
-absence means the console never requested the package. An install that was attempted and
-failed would instead leave a download or
-unpack error.
-
-Do not rely on `/data/unifi-core/config/consoleGroup.yaml`. It carries an
-`applications:` block on a UDM Pro at `5.1.26` and only console *group* membership on a
-UCG-Fiber at `5.1.19`, and it is not the install gate either way — the UDM Pro installed
-Apollo while `role: UNADOPTED` with `apollo.owned: false`.
+Console mode additionally needs your Play hardware discovered by that console and an
+API key created on it (**Settings → Control Plane → API Keys**). If Apollo never
+appears on your console — it is model-gated, and changing the update channel does not
+help — just use direct connection. The full story of what Apollo is, which consoles
+get it, and how to check yours lives in [docs/apollo.md](docs/apollo.md).
 
 ## Installation
 
@@ -202,7 +98,7 @@ All communication stays local on your network.
 | `UPL-AMP` | PowerAmp | Yes |
 | `UPL-PORT` | In-Wall Port | Community-reported, not hardware-tested by maintainer |
 
-Both device types use the same Apollo REST discovery and MQTT control paths. If you run into device-specific issues (for example on a Port), please include the device platform from the logs when opening an issue.
+Both device types use the same discovery and MQTT control paths. If you run into device-specific issues (for example on a Port), please include the device platform from the logs when opening an issue.
 
 ## Troubleshooting
 
@@ -235,40 +131,17 @@ Setup reports a specific reason for each failure. Find your message below:
 | **Could not reach the console** | No HTTP response at all — wrong address, not routable from HA, or a timeout | Enter only the IP or hostname (e.g. `192.168.10.1`), without `https://`. Confirm Home Assistant can reach it. |
 | **The console rejected the API key (HTTP 401)** | Purely a credential problem. A 401 means the Apollo route exists and its auth layer turned you away — so Apollo *is* installed | Paste a fresh key from **Settings → Control Plane → API Keys** on this console, whole and untruncated. |
 | **The console refused the API key (HTTP 403)** | Key is valid but not for this console, or revoked | API keys are per-console — create the key on the same console you entered. |
-| **This console has no Apollo application** | The console answered with its web UI instead of an API, meaning no Apollo route exists | Confirm this is the console your Play hardware is adopted to, and if the hardware is new give it time to be discovered (a reboot forces the issue). Some console models do not get Apollo at all on their current update channel — see [When a console never installs Apollo](#when-a-console-never-installs-apollo). |
+| **This console has no Apollo application** | The console answered with its web UI instead of an API, meaning no Apollo route exists | Use **direct connection** instead — some console models never get Apollo ([details](docs/apollo.md)). |
 | **Apollo answered but has no device API** | Apollo is installed but does not serve the expected path — a version mismatch | Please open an issue with your console firmware and Apollo version. |
 | **That address is Ubiquiti's cloud (ui.com)** | You entered `api.ui.com` or another ui.com address. That is the Site Manager cloud API — a different API that does not proxy Apollo | Enter your console's own local IP or hostname, with a key created on that console. |
 
-Setup succeeds but no devices appear? The API answered with an empty list, so
-your address and key are fine — there is just no Play hardware visible to that
-console yet. The logs will show `returned no Play devices`. Adopt your hardware
-(rebooting the console if it does not show up) and it will be picked up within
-five minutes — the integration re-checks for newly adopted devices on that
-interval, so there is no need to reload it.
+Setup succeeds but no devices appear? The API answered with an empty list, so your
+address and key are fine — the console just has no Play hardware visible yet. Devices
+are re-checked every 5 minutes, so there is no need to reload the integration once
+they appear.
 
-To check the API by hand from any machine that can reach the console:
-
-```bash
-curl -k -sS -i \
-  -H "X-API-KEY: YOUR_KEY_HERE" \
-  -H "Accept: application/json" \
-  "https://192.168.10.1/proxy/apollo/api/v1/devices"
-```
-
-**Read the `content-type`, not just the status line.** UniFi OS has no route for a
-proxy path whose application is not installed, so the request falls through to the web
-UI and comes back `200` with an HTML body — even with a perfectly valid key. A status
-code on its own cannot tell "Apollo missing" from "Apollo working":
-
-| Response | Meaning |
-|----------|---------|
-| `200` + `application/json` | Working. Apollo installed and the key accepted |
-| `200` + `text/html` | **No Apollo application on this console.** You are looking at the UniFi OS web UI, not an API |
-| `401` + `application/json` | Apollo *is* installed; the key was rejected |
-| `404` + `text/plain` | Apollo is installed but has no such path |
-
-Note the header must be `X-API-KEY: <key>` — `curl` silently ignores a `-H` value with
-no colon in it, which looks exactly like an auth failure.
+To probe the Apollo API by hand (including how to tell "no Apollo" from "bad key"),
+see [docs/apollo.md](docs/apollo.md).
 
 For anything else, enable debug logging (**Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging**), retry setup, and share lines containing `custom_components.unifi_play` in a GitHub issue (redact your API key). At debug level the integration logs the exact URL requested, HTTP status, and response body.
 
