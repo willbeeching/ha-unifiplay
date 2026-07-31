@@ -50,18 +50,24 @@ The console's channel lives in `/data/unifi-core/config/firmware.yaml` as
 `max_release_channel`. `runnables.yaml` carries a `releaseChannels:` map naming a
 channel per application, plus an `updates:` map holding any pinned version.
 
-**Apollo's entry in that map is per-console, not global:** `release-candidate` on a UDM
-Pro versus `beta` on a UCG-Fiber. Availability therefore appears staged per model, so
-"which channel is Apollo published at for *this* console" is the useful question.
+**That map is a per-application channel preference the owner can change**, not a record
+of where Ubiquiti publishes a package. Observed `apollo` values differ across consoles
+(`release`, `release-candidate`, `beta`) and follow the owner's settings — changing
+another application's channel in the UI rewrites its entry directly. Do not infer
+package availability from it.
 
-Across the consoles observed in [#4](https://github.com/willbeeching/ha-unifiplay/issues/4),
-Apollo is present on both non-Official consoles (one Early Access, one
-`release-candidate`) and absent on both Official ones. No console on `release` has yet
-been seen with Apollo, though the sample is four and one further working console in
-[#3](https://github.com/willbeeching/ha-unifiplay/issues/3) went unrecorded. Note this
-does not conflict with Play being a retail product: Play hardware is driven by the Play
-mobile app and requires no console, so Apollo's console-side rollout is independent of
-hardware availability.
+**The channel is not the gate.** Across [#4](https://github.com/willbeeching/ha-unifiplay/issues/4),
+two consoles were raised to `beta` — the highest tier — with Play hardware adopted, and
+neither installed Apollo; on one, other applications gained new version choices at the
+same time, so the change had clearly taken effect. The discriminating variable is the
+console **model**: Apollo runs on UDM Pros and has never been seen on a UCG-Fiber or a
+Cloud Key Plus at any channel. The sharpest case is one owner's two consoles, both on
+firmware `v5.1.27` and both non-Official, where the UDM Pro runs Apollo and the Cloud
+Key Plus has no `apollo` process at all.
+
+This does not conflict with Play being a retail product: Play hardware is driven by the
+Play mobile app and requires no console, so Apollo's console-side rollout is independent
+of hardware availability.
 
 **Apollo is not distributed through apt.** On a working UDM Pro, `apt-cache policy
 apollo` reports `0.7.4` with its only source `/var/lib/dpkg/status` — no repository

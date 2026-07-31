@@ -38,64 +38,56 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 
 > ### When a console never installs Apollo
 >
-> **Every console observed with Apollo working has been on a non-Official update
-> channel**, and every console observed without it has been on Official
+> **Apollo appears to be gated by console model.** Reported so far
 > ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)):
 >
-> | Console | Channel | Apollo |
+> | Console | Channel tested | Apollo |
 > |---|---|---|
 > | UDM Pro | Early Access | Working |
 > | UDM Pro | `release-candidate` | Working |
-> | UCG-Fiber | Official | Never installs |
-> | Cloud Key Plus | Official | Never installs |
+> | UCG-Fiber | `release`, then `beta` | Never installs |
+> | Cloud Key Plus | `beta` | Never installs |
 >
-> That is four data points, not proof, and no console on Official has yet been seen with
-> Apollo. Treat it as the first thing to check, not a settled rule — at least one further
-> console was reported working with a Play Audio Port in
-> [#3](https://github.com/willbeeching/ha-unifiplay/issues/3), and neither its model nor
-> its channel was ever recorded.
+> **Changing your update channel is not a workaround — this has been tested.** Two
+> consoles were moved to `beta`, the highest tier, with Play hardware already adopted,
+> and Apollo still never installed. On one of them the switch demonstrably took effect
+> (other applications gained new version choices); Apollo simply had no package
+> available. Please don't put your gateway on pre-release firmware for this.
 >
-> None of this contradicts UniFi Play being generally available at retail: Play hardware
-> is managed through the Play mobile app and needs no console at all, so an
-> Early-Access-only Apollo breaks nothing for an ordinary buyer. Apollo is the
-> console-side application layered on top, and it is what this integration needs.
+> The cleanest evidence is a single owner's two consoles: a UDM Pro and a Cloud Key
+> Plus, both on firmware `v5.1.27`, both on non-Official channels, both with Play
+> hardware adopted. Apollo runs on the UDM Pro and is entirely absent on the Cloud Key
+> Plus. Model is the only variable left.
 >
-> Availability also looks **staged per model**, recorded on the console itself.
-> `/data/unifi-core/config/runnables.yaml` holds a `releaseChannels:` map naming the
-> channel Apollo is published at *for that console*, and the observed values differ:
-> `release-candidate` on a UDM Pro, `beta` on a UCG-Fiber. So the channel your console
-> needs may be higher than someone else's.
+> This is consistent with the one structural difference found between consoles: a UDM
+> Pro's `consoleGroup.yaml` carries `apollo: { required: false, owned: false, supported:
+> true }` — a per-model support flag — while a UCG-Fiber has no `applications:` block at
+> all.
 >
-> Two conditions must both hold before a console fetches Apollo:
+> So if Apollo never appears on your console, the likeliest answer is that **Ubiquiti has
+> not released it for your model**, and there is nothing to configure. Note also that
+> none of this conflicts with Play being a retail product: Play hardware is driven by the
+> Play mobile app and needs no console, so Apollo's console-side rollout is independent
+> of hardware availability.
+>
+> Two conditions must hold before a console fetches Apollo. Both are necessary; neither
+> has proven sufficient:
 >
 > 1. **An Apollo-line device is discovered on it.** `apollo` is the only application in
 >    UniFi OS's catalogue flagged `installOnDeviceDiscovery: true`, and that discovery
->    is what triggers the fetch.
-> 2. **A published package exists at or below the console's own channel**
+>    is what triggers the fetch. A UDM Pro on `release-candidate` sat for six months
+>    logging `Package "apollo" not installed` every boot, then installed Apollo the day
+>    an Apollo device appeared.
+> 2. **A package exists for the console to fetch** at or below its channel
 >    (`releaseChannel` in `firmware.yaml`, seen in the logs as `max_release_channel`).
+>    Apollo is not distributed through apt — `unifi-core` fetches the `.deb` directly
+>    from Ubiquiti — so there is no repository you can add.
 >
-> Neither alone is enough. A UDM Pro on `release-candidate` sat for six months logging
-> `Package "apollo" not installed` on every boot, then installed Apollo the day an
-> Apollo device appeared.
->
-> If Apollo never installs, compare the two values:
->
-> ```bash
-> grep -i releaseChannel /data/unifi-core/config/firmware.yaml      # what this console accepts
-> grep -A10 releaseChannels /data/unifi-core/config/runnables.yaml  # where apollo is published
-> ```
->
-> If Apollo's channel sits above your console's, the package has not been released for
-> your model at your channel yet. Note the UI's channel names and the on-disk values are
-> not the same words, so check `firmware.yaml` rather than trusting the dropdown — and
-> if Apollo is published at `beta` on your model, Release Candidate may not be far
-> enough.
->
-> Raising the console's channel is the available workaround, but it puts the whole
-> console on pre-release firmware — a real cost on a gateway that routes your household,
-> and worth weighing against simply waiting for Apollo to reach your model's Official
-> channel. There is no repository to add instead: Apollo is not distributed through apt,
-> and `unifi-core` fetches the `.deb` directly from Ubiquiti.
+> One caution on reading the config: `runnables.yaml`'s `releaseChannels:` map is a
+> **per-application channel preference you can change**, not a record of where Ubiquiti
+> publishes a package. Observed values for `apollo` differ across consoles (`release`,
+> `release-candidate`, `beta`) and track the owner's settings. Do not infer package
+> availability from it.
 >
 > Please add your console model, channel, and whether Apollo installed to
 > [#4](https://github.com/willbeeching/ha-unifiplay/issues/4) — the table above is small
@@ -113,16 +105,17 @@ If you have console access, this sequence distinguishes *Apollo was never fetche
 *Apollo is installed but broken*:
 
 ```bash
-grep -i releaseChannel /data/unifi-core/config/firmware.yaml   # the usual culprit
-grep -i apollo /data/unifi-core/logs/uos.log | tail -5         # fetch or version probe
+ps auxwww | grep -i apollo                                     # is it running at all?
 systemctl list-unit-files | grep -i apollo                     # is there a service?
+grep -i apollo /data/unifi-core/logs/uos.log | tail -5         # fetch or version probe
+grep -i releaseChannel /data/unifi-core/config/firmware.yaml   # for the record
 ```
 
 `ERROR Exit with error: Package "apollo" not installed` in `uos.log`, plus no systemd
-unit, means the package has never been on the console. Look for whether a
+unit and no process, means the package has never been on the console. Look for whether a
 `Start to download package package_name=apollo` line appears anywhere in that log: its
-absence means the console never requested the package, which is what an Official-channel
-console does. An install that was attempted and failed would instead leave a download or
+absence means the console never requested the package. An install that was attempted and
+failed would instead leave a download or
 unpack error.
 
 Do not rely on `/data/unifi-core/config/consoleGroup.yaml`. It carries an
