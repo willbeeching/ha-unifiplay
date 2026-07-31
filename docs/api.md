@@ -19,13 +19,16 @@ apollo:
   serviceName: 'apollo'
   ports: { http: { api: 19880 } }
   displayName: 'Apollo'
+  disableBackups: true
   installOnDeviceDiscovery: true
 ```
 
+Note there is no channel, version, or per-model gating in this entry.
+
 `installOnDeviceDiscovery` is why nobody installs Apollo by hand — and Apollo is the
 only application in the catalogue that carries the flag. Discovering a device from the
-Apollo hardware line (`UPL-Amp-B/W` PowerAmp, `UPL-Port-B/W` Play Audio Port) causes
-the console to download and install the package. `unifi-core` then writes
+Apollo hardware line (`UPL-Amp-B/W` PowerAmp, `UPL-Port-B/W` Play Audio Port) triggers
+the fetch. `unifi-core` then writes
 `/data/unifi-core/config/http/shared-runnable-apollo.conf` and reloads nginx, which is
 what makes `/proxy/apollo/` exist.
 
@@ -34,19 +37,29 @@ block, so requests hit the UniFi OS single-page-app catch-all and return **`200`
 an HTML body** — not 404, and regardless of credentials. See
 [Distinguishing failures](#distinguishing-failures).
 
-Per-model support is tracked in `/data/unifi-core/config/consoleGroup.yaml` under
-`applications:` — **on the UDM Pro, where this was observed**. An
-`apollo: supported: false` there would mean that console can never run Apollo. The file
-does not serve that purpose on UniFi OS 5.x: on a UCG-Fiber running 5.1.19 it holds
-console *group* membership instead (`self.role`, `members`), with no `applications:`
-block at all.
+### The install gate: discovery × release channel
 
-### Discovery does not guarantee installation
+`installOnDeviceDiscovery` is necessary but not sufficient. Two conditions must both
+hold ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)):
 
-`installOnDeviceDiscovery` describes intent, not a guarantee. On the UCG-Fiber above,
-with an Audio Port adopted and online for six months, the console repeats this cycle on
-every boot and never installs the package
-([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)):
+1. An Apollo-line device is discovered on the console.
+2. The console's release channel is high enough that a published `apollo` package
+   exists. Apollo appears to be published on `release-candidate` and `beta` **only,
+   never on `release`** (Official).
+
+The channel lives in `/data/unifi-core/config/firmware.yaml` as `releaseChannel`, and
+surfaces in the logs as `max_release_channel`. `runnables.yaml` carries a
+`releaseChannels:` map naming a channel per application, and an `updates:` map holding
+any pinned version.
+
+**Apollo is not distributed through apt.** On a working UDM Pro, `apt-cache policy
+apollo` reports `0.7.4` with its only source `/var/lib/dpkg/status` — no repository
+URL — and the apt sources are stock Debian bullseye with an empty `sources.list.d/`.
+`unifi-core` downloads the `.deb` directly from `fw-download.ubnt.com/data/apollo/…`
+and invokes `dpkg`, gated by `max_release_channel`. There is no repository a user can
+add to obtain Apollo while remaining on Official.
+
+A console failing gate 2 logs this cycle on every boot and never progresses:
 
 ```
 systemd.log  info: Initialize apollo service
@@ -56,15 +69,40 @@ apps.log     warn: Attempted to enable auto-update for apollo application but it
                    not installed, configured, or is not ready
 ```
 
-No download, unpack, or signature error appears anywhere — the console is not failing
-to install Apollo, it is never requesting it. `systemctl list-unit-files | grep -i
-apollo` is empty on that console, confirming the package has never been present.
+No download, unpack, or signature error appears — the console is not failing to install
+Apollo, it never requests it. A console that passes both gates logs instead:
 
-That console's `runnables.yaml` carries `apollo: beta` while every installed
-application is on the Official release channel, suggesting Apollo is published
-pre-release on some platforms. Unconfirmed, but it fits the observed behaviour: a
-console tracking Official would never fetch a beta-channel package, however many Play
-devices it discovers.
+```
+uos.log   INFO Start to download package package_name=apollo version=None
+               max_release_channel=Some(ReleaseCandidate) use_user_prefs=false
+uos.log   INFO Downloading runnable package_name=apollo url=<fw-download…/apollo/….deb>
+          Unpacking apollo (0.7.4) → Setting up apollo (0.7.4)
+apps.log  info: Installing the latest version of "apollo" application from
+                "release-candidate" release channel
+```
+
+`Start to download` is the discriminating line. The UDM Pro documented here sat on
+`release-candidate` for six months emitting the failure cycle, then installed Apollo the
+day an Apollo device appeared — so neither gate alone suffices. (The device-discovery
+half is inferred from the mechanism and the timing, not from a contiguous trace: the
+retained install and discovery log lines are hours apart.)
+
+### consoleGroup.yaml is not the gate
+
+`/data/unifi-core/config/consoleGroup.yaml` carries an `applications:` block on a UDM
+Pro at `5.1.26` (`apollo: { required: false, owned: false, supported: true }`) but only
+console *group* membership on a UCG-Fiber at `5.1.19`. Both consoles report
+`self.role: UNADOPTED`, so console-group role does not explain the difference — a point
+firmware version is the likelier cause. Either way the file does not gate installation:
+the UDM Pro installed Apollo while `UNADOPTED` with `apollo.owned: false`.
+
+### Apollo devices need not appear in UniFi Network
+
+An Apollo device in state `MANAGED_BY_OTHER` is absent from the Network application's
+device list while remaining fully visible to the Apollo backend (it may show only as a
+client). The converse also occurs: a Cloud Key Plus has been reported listing five Audio
+Ports in Network with no Apollo application at all. Neither list is evidence about the
+other.
 
 ## Architecture
 

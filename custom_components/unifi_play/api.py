@@ -57,6 +57,11 @@ class UnifiPlayServiceUnavailableError(UnifiPlayApiError):
     the UniFi OS single-page-app catch-all, which answers ``200`` with an HTML
     body — regardless of whether the API key is valid. So HTML is the signal,
     not the status code.
+
+    The usual cause is the console's update channel: Apollo is published on
+    release-candidate and beta only, so a console tracking Official never
+    fetches the package however many Play devices it has adopted. See
+    docs/api.md for the full install gate.
     """
 
 
