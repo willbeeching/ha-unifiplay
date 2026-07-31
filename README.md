@@ -6,7 +6,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 [![vibe-coded](https://img.shields.io/badge/vibe-coded-ff69b4?logo=musicbrainz&logoColor=white)](https://en.wikipedia.org/wiki/Vibe_coding)
 
-A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wall, etc.) managed by a UniFi OS Console (UDM Pro, Cloud Gateway, etc.).
+A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wall, etc.) — with or without a UniFi OS Console. Since v1.1.0 the integration can discover and control speakers directly, so it works even on consoles that never get the Apollo application (UCG-Fiber, Cloud Key, …), or with no console at all.
 
 ## Features
 
@@ -20,6 +20,21 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 - **Real-time state** via direct MQTT connection to each device
 
 ## Requirements
+
+The integration has two connection modes, chosen at setup:
+
+- **Direct connection (recommended, no console needed).** Home Assistant finds the
+  speakers itself with the standard Ubiquiti discovery probe (UDP 10001 — the same
+  one WiFiman uses) and talks MQTT straight to each device. Works on any network,
+  regardless of console model, update channel, or whether you own a console at all.
+  Speakers on Home Assistant's own subnet are found automatically; speakers on other
+  VLANs can be listed by IP.
+- **Via a UniFi OS Console** running the **Apollo** application. Discovery goes
+  through the console's `/proxy/apollo` API; control is still direct MQTT. Only
+  choose this if your console has Apollo — and note the model gating below.
+
+If your console never gets Apollo, you are not stuck: use direct connection.
+Everything below in this section applies to console mode only.
 
 - A UniFi OS Console running the **Apollo** application. This is the part people get
   stuck on, so in detail:
@@ -65,7 +80,8 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 > all.
 >
 > So if Apollo never appears on your console, the likeliest answer is that **Ubiquiti has
-> not released it for your model**, and there is nothing to configure. Note also that
+> not released it for your model**, and there is nothing to configure — **use the
+> integration's direct connection mode instead**, which does not involve the console. Note also that
 > none of this conflicts with Play being a retail product: Play hardware is driven by the
 > Play mobile app and needs no console, so Apollo's console-side rollout is independent
 > of hardware availability.
@@ -144,26 +160,38 @@ Copy the `custom_components/unifi_play` folder into your Home Assistant `config/
 
 ## Configuration
 
-### 1. Create a UniFi API key
+Go to **Settings → Devices & Services → Add Integration**, search for **UniFi Play**,
+and pick a connection mode.
 
-1. Log in to your UniFi OS Console (e.g. `https://10.0.0.1`)
-2. Navigate to **Settings → Control Plane → API Keys**
-3. Click **Create API Key**, give it a name (e.g. "Home Assistant"), and copy the key
-4. Keep this key safe — you won't be able to view it again
+### Direct connection (no console needed)
 
-### 2. Add the integration
+1. Choose **Direct connection**
+2. If your speakers are on the same subnet as Home Assistant, leave the field empty —
+   they are found automatically
+3. If they are on a different VLAN or subnet, enter their IP addresses (comma
+   separated). You can read them from the UniFi Network client list or the Play
+   mobile app. Make sure nothing blocks UDP 10001 and TCP 8883 between Home
+   Assistant and the speakers
+4. New devices are re-scanned for every 5 minutes
 
-1. Go to **Settings → Devices & Services → Add Integration**
-2. Search for **UniFi Play**
-3. Enter your UniFi OS Console IP address or hostname only (e.g. `10.0.0.1` — do not include `https://`) and the API key from step 1
+### Via UniFi OS Console
+
+1. Create an API key on the console: **Settings → Control Plane → API Keys** →
+   **Create API Key** (you won't be able to view it again)
+2. Choose **Via UniFi OS Console** in the integration setup
+3. Enter your console's IP address or hostname only (e.g. `10.0.0.1` — do not include
+   `https://`) and the API key
 4. Devices will be discovered automatically
 
 ## How it works
 
-The integration uses two communication channels:
+Control and state are always a direct **MQTT** connection (port 8883, mTLS) to each
+speaker — the same channel the Play mobile app uses. The only difference between the
+modes is discovery:
 
-- **REST API** on the UDM Pro (`/proxy/apollo/api/v1/`) for device discovery
-- **MQTT** (port 8883, mTLS) directly to each device for real-time state updates and control
+- **Direct**: Ubiquiti's discovery protocol (UDP 10001, broadcast on the local subnet,
+  unicast to any manually listed IPs) — answered by the speakers themselves
+- **Console**: the console's Apollo REST API (`/proxy/apollo/api/v1/`)
 
 All communication stays local on your network.
 
@@ -177,6 +205,28 @@ All communication stays local on your network.
 Both device types use the same Apollo REST discovery and MQTT control paths. If you run into device-specific issues (for example on a Port), please include the device platform from the logs when opening an issue.
 
 ## Troubleshooting
+
+### Direct connection
+
+| Message | Cause | Fix |
+|---------|-------|-----|
+| **No UniFi Play devices answered on Home Assistant's subnet** | The broadcast probe got no reply — the speakers are on a different VLAN/subnet, or unreachable | Enter the speakers' IP addresses in the setup field; they will be probed directly (works across VLANs). |
+| **The addresses you entered did not answer the discovery probe** | Wrong IP, device offline, or a firewall dropping UDP 10001 | Verify the IPs, and allow UDP 10001 (discovery) and TCP 8883 (MQTT) from Home Assistant to the speakers. |
+
+To test the discovery probe by hand from any machine that can reach the speaker:
+
+```bash
+python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3)
+s.sendto(b'\x01\x00\x00\x00', ('SPEAKER_IP', 10001))
+print(s.recvfrom(2048))"
+```
+
+Any reply at all means discovery works; a timeout means the IP is wrong or UDP 10001
+is blocked.
+
+### Console mode
 
 Setup reports a specific reason for each failure. Find your message below:
 

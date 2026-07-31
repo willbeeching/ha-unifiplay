@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import UnifiPlayApi, UnifiPlayApiError
+from .discovery import async_discover
 from .mqtt_client import UnifiPlayMqttClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -140,7 +141,12 @@ class UnifiPlayDeviceState:
 class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]]):
     """Coordinates REST discovery + MQTT real-time updates for all devices."""
 
-    def __init__(self, hass: HomeAssistant, api: UnifiPlayApi) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        api: UnifiPlayApi | None,
+        manual_hosts: list[str] | None = None,
+    ) -> None:
         super().__init__(
             hass,
             _LOGGER,
@@ -148,15 +154,28 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             update_interval=DISCOVERY_INTERVAL,
         )
         self.api = api
+        self.manual_hosts = manual_hosts or []
         self._mqtt_clients: dict[str, UnifiPlayMqttClient] = {}
         self._device_states: dict[str, UnifiPlayDeviceState] = {}
 
     async def _async_update_data(self) -> dict[str, UnifiPlayDeviceState]:
-        """Fetch device list from REST and return current state dict."""
-        try:
-            devices = await self.api.get_devices()
-        except UnifiPlayApiError as err:
-            raise UpdateFailed(f"Error fetching devices: {err}") from err
+        """Fetch the device list and return current state dict.
+
+        Console mode asks the console's Apollo REST API; direct mode probes
+        the network itself (UDP broadcast plus unicast to any manual hosts).
+        Devices seen once are kept even if a later scan misses them — MQTT
+        remains the source of truth for online state.
+        """
+        if self.api is not None:
+            try:
+                devices = await self.api.get_devices()
+            except UnifiPlayApiError as err:
+                raise UpdateFailed(f"Error fetching devices: {err}") from err
+        else:
+            try:
+                devices = await async_discover(manual_hosts=self.manual_hosts)
+            except OSError as err:
+                raise UpdateFailed(f"Discovery socket error: {err}") from err
 
         for dev in devices:
             dev_id = dev["id"]
@@ -169,6 +188,12 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                     state.platform,
                     state.ip or "unknown IP",
                 )
+            else:
+                state = self._device_states[dev_id]
+                if dev.get("ip"):
+                    state.ip = dev["ip"]
+                if dev.get("firmware"):
+                    state.firmware = dev["firmware"]
             ip = dev.get("ip", "")
             mac = dev.get("mac", "")
             if ip and mac and dev_id not in self._mqtt_clients:
@@ -233,4 +258,5 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         for client in self._mqtt_clients.values():
             await client.disconnect()
         self._mqtt_clients.clear()
-        await self.api.close()
+        if self.api is not None:
+            await self.api.close()

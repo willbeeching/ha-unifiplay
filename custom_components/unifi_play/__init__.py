@@ -10,7 +10,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import UnifiPlayApi
-from .const import CONF_API_KEY, CONF_CONTROLLER_HOST, DOMAIN
+from .const import (
+    CONF_API_KEY,
+    CONF_CONTROLLER_HOST,
+    CONF_MANUAL_HOSTS,
+    CONF_MODE,
+    DOMAIN,
+    MODE_CONSOLE,
+    MODE_DIRECT,
+)
 from .coordinator import UnifiPlayCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,15 +37,25 @@ type UnifiPlayConfigEntry = ConfigEntry
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: UnifiPlayConfigEntry) -> bool:
-    """Set up UniFi Play from a config entry."""
-    session = async_get_clientsession(hass, verify_ssl=False)
-    api = UnifiPlayApi(
-        host=entry.data[CONF_CONTROLLER_HOST],
-        api_key=entry.data[CONF_API_KEY],
-        session=session,
-    )
+    """Set up UniFi Play from a config entry.
 
-    coordinator = UnifiPlayCoordinator(hass, api)
+    Entries created before connection modes existed carry no CONF_MODE and
+    are console entries.
+    """
+    mode = entry.data.get(CONF_MODE, MODE_CONSOLE)
+
+    if mode == MODE_DIRECT:
+        coordinator = UnifiPlayCoordinator(
+            hass, api=None, manual_hosts=entry.data.get(CONF_MANUAL_HOSTS, [])
+        )
+    else:
+        session = async_get_clientsession(hass, verify_ssl=False)
+        api = UnifiPlayApi(
+            host=entry.data[CONF_CONTROLLER_HOST],
+            api_key=entry.data[CONF_API_KEY],
+            session=session,
+        )
+        coordinator = UnifiPlayCoordinator(hass, api)
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator

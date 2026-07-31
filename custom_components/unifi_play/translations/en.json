@@ -3,10 +3,25 @@
     "step": {
       "user": {
         "title": "Connect to UniFi Play",
+        "description": "Choose how to find your UniFi Play devices. Direct connection talks to the speakers themselves and works on any network — including consoles that have no Apollo application (UCG-Fiber, Cloud Key, and others).",
+        "menu_options": {
+          "console": "Via UniFi OS Console (Apollo API)",
+          "direct": "Direct connection (no console needed)"
+        }
+      },
+      "console": {
+        "title": "Connect via UniFi OS Console",
         "description": "Enter your UDM Pro (or UniFi OS Console) IP address or hostname (without https://) and an API key.",
         "data": {
           "controller_host": "Controller Host",
           "api_key": "API Key"
+        }
+      },
+      "direct": {
+        "title": "Direct connection",
+        "description": "Home Assistant will find Play devices on its own subnet automatically. If your speakers are on a different VLAN or subnet, list their IP addresses here (comma separated) — you can read them from the UniFi Network client list or the Play mobile app.",
+        "data": {
+          "manual_hosts": "Device IP addresses (optional)"
         }
       }
     },
@@ -14,9 +29,12 @@
       "cannot_connect": "Could not reach the console. Check the IP or hostname is correct and reachable from Home Assistant, and that you entered it without https://. Enable debug logging for this integration (Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging) and retry to capture more information.",
       "invalid_auth": "The console rejected the API key (HTTP 401). The Apollo application is installed, so this is purely a credential problem — create a new key under Settings → Control Plane → API Keys on this console and paste it whole.",
       "forbidden": "The console refused the API key (HTTP 403). API keys are per-console, so check the key was created on the console you entered and has not been revoked.",
-      "apollo_unavailable": "This console has no Apollo application, which is what serves the UniFi Play API. Apollo installs itself when a console discovers UniFi Play hardware, but only where the package has been released for that console's model and update channel — on some models it never arrives. Check this is the console your Play hardware is adopted to, then see the README for how to tell which applies.",
+      "apollo_unavailable": "This console has no Apollo application, which is what serves the UniFi Play API. Apollo installs itself when a console discovers UniFi Play hardware, but only where the package has been released for that console's model — on some models it never arrives. Go back and choose Direct connection instead: it does not need the console at all.",
       "unsupported_api": "The Apollo application answered but has no device API at the expected path. Your Apollo version may be newer or older than this integration supports — please open an issue including your console firmware and Apollo version.",
       "cloud_host": "That address is Ubiquiti's cloud (ui.com), which serves the Site Manager API — a different API that does not proxy Apollo, so this integration cannot use it. Enter your console's own IP address or local hostname instead, with an API key created on that console (Settings → Control Plane → API Keys).",
+      "no_devices_found": "No UniFi Play devices answered on Home Assistant's subnet. If your speakers are on a different VLAN or subnet, enter their IP addresses in the field above. Otherwise check they are powered on and reachable from Home Assistant.",
+      "no_response": "The addresses you entered did not answer the discovery probe (UDP port 10001). Check each IP is correct and that no firewall rule blocks UDP 10001 between Home Assistant and the speakers.",
+      "discovery_failed": "Could not open a discovery socket. Check the Home Assistant logs for details.",
       "unknown": "Unexpected error. Check the Home Assistant logs for details."
     },
     "abort": {
