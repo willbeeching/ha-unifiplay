@@ -51,11 +51,17 @@ The console's channel lives in `/data/unifi-core/config/firmware.yaml` as
 channel per application, plus an `updates:` map holding any pinned version.
 
 **Apollo's entry in that map is per-console, not global:** `release-candidate` on a UDM
-Pro versus `beta` on a UCG-Fiber. Availability therefore appears staged per model, and
-nothing here establishes that Apollo is withheld from `release` in general — a working
-UDM Pro on `release-candidate` is a single positive observation, and UniFi Play hardware
-is generally available at retail. Treat "which channel is Apollo published at for *this*
-console" as the question, not "is Apollo on Official".
+Pro versus `beta` on a UCG-Fiber. Availability therefore appears staged per model, so
+"which channel is Apollo published at for *this* console" is the useful question.
+
+Across the consoles observed in [#4](https://github.com/willbeeching/ha-unifiplay/issues/4),
+Apollo is present on both non-Official consoles (one Early Access, one
+`release-candidate`) and absent on both Official ones. No console on `release` has yet
+been seen with Apollo, though the sample is four and one further working console in
+[#3](https://github.com/willbeeching/ha-unifiplay/issues/3) went unrecorded. Note this
+does not conflict with Play being a retail product: Play hardware is driven by the Play
+mobile app and requires no console, so Apollo's console-side rollout is independent of
+hardware availability.
 
 **Apollo is not distributed through apt.** On a working UDM Pro, `apt-cache policy
 apollo` reports `0.7.4` with its only source `/var/lib/dpkg/status` — no repository

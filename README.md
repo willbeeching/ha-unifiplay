@@ -38,13 +38,33 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 
 > ### When a console never installs Apollo
 >
-> Apollo's availability looks to be **staged per console model and update channel**, and
-> the staging is recorded on the console itself. `/data/unifi-core/config/runnables.yaml`
-> holds a `releaseChannels:` map naming the channel Apollo is published at *for that
-> console*, and the observed values differ — `release-candidate` on a UDM Pro, `beta` on
-> a UCG-Fiber ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)). So this is
-> not a fixed property of the package, and Apollo reaching Official on a given model is
-> expected rather than ruled out.
+> **Every console observed with Apollo working has been on a non-Official update
+> channel**, and every console observed without it has been on Official
+> ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)):
+>
+> | Console | Channel | Apollo |
+> |---|---|---|
+> | UDM Pro | Early Access | Working |
+> | UDM Pro | `release-candidate` | Working |
+> | UCG-Fiber | Official | Never installs |
+> | Cloud Key Plus | Official | Never installs |
+>
+> That is four data points, not proof, and no console on Official has yet been seen with
+> Apollo. Treat it as the first thing to check, not a settled rule — at least one further
+> console was reported working with a Play Audio Port in
+> [#3](https://github.com/willbeeching/ha-unifiplay/issues/3), and neither its model nor
+> its channel was ever recorded.
+>
+> None of this contradicts UniFi Play being generally available at retail: Play hardware
+> is managed through the Play mobile app and needs no console at all, so an
+> Early-Access-only Apollo breaks nothing for an ordinary buyer. Apollo is the
+> console-side application layered on top, and it is what this integration needs.
+>
+> Availability also looks **staged per model**, recorded on the console itself.
+> `/data/unifi-core/config/runnables.yaml` holds a `releaseChannels:` map naming the
+> channel Apollo is published at *for that console*, and the observed values differ:
+> `release-candidate` on a UDM Pro, `beta` on a UCG-Fiber. So the channel your console
+> needs may be higher than someone else's.
 >
 > Two conditions must both hold before a console fetches Apollo:
 >
@@ -66,16 +86,20 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 > ```
 >
 > If Apollo's channel sits above your console's, the package has not been released for
-> your model at your channel yet. Raising the console's channel is one option, but it
-> puts the whole console on pre-release firmware — a real cost on a gateway that routes
-> your household, and worth weighing against simply waiting. There is no repository to
-> add instead: Apollo is not distributed through apt, and `unifi-core` fetches the `.deb`
-> directly from Ubiquiti.
+> your model at your channel yet. Note the UI's channel names and the on-disk values are
+> not the same words, so check `firmware.yaml` rather than trusting the dropdown — and
+> if Apollo is published at `beta` on your model, Release Candidate may not be far
+> enough.
 >
-> **Reports so far:** working on UDM Pro; never installing on UCG-Fiber or Cloud Key
-> Plus. UniFi Play hardware is generally available at retail, so a supported console on
-> Official is expected to get Apollo in time — please add your model to
-> [#4](https://github.com/willbeeching/ha-unifiplay/issues/4) either way.
+> Raising the console's channel is the available workaround, but it puts the whole
+> console on pre-release firmware — a real cost on a gateway that routes your household,
+> and worth weighing against simply waiting for Apollo to reach your model's Official
+> channel. There is no repository to add instead: Apollo is not distributed through apt,
+> and `unifi-core` fetches the `.deb` directly from Ubiquiti.
+>
+> Please add your console model, channel, and whether Apollo installed to
+> [#4](https://github.com/willbeeching/ha-unifiplay/issues/4) — the table above is small
+> and every data point sharpens it.
 
 > **Devices in UniFi Network are a separate matter.** A Cloud Key Plus has been
 > reported listing five Audio Ports in UniFi Network while never gaining an Apollo
