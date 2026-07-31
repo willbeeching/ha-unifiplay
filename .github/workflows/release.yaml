@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, including the v (e.g. v1.0.8). The tag is created at the dispatched ref."
+        required: true
 
 jobs:
   release:
@@ -17,17 +22,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get version from tag
+      - name: Get version
         id: get_version
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/}
+          fi
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "VERSION_NUMBER=${VERSION#v}" >> $GITHUB_OUTPUT
 
       - name: Get previous tag
         id: prev_tag
         run: |
-          PREV_TAG=$(git describe --abbrev=0 --tags $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
+          # On a tag push the newest tag is the one being released, so the
+          # previous release is the second-newest; on dispatch the tag does
+          # not exist yet, so the newest existing tag is the previous release.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          else
+            PREV_TAG=$(git describe --abbrev=0 --tags $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
+          fi
           echo "PREV_TAG=$PREV_TAG" >> $GITHUB_OUTPUT
 
       - name: Generate changelog
@@ -45,6 +61,7 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
           name: "UniFi Play ${{ steps.get_version.outputs.VERSION }}"
           body: |
             ## What's Changed
