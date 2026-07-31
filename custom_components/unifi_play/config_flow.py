@@ -28,6 +28,17 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 )
 
 
+def _is_ui_cloud_host(host: str) -> bool:
+    """Return True for Ubiquiti cloud hosts such as api.ui.com.
+
+    The Site Manager cloud API answers a JSON 404 at the Apollo path, which
+    would otherwise be misreported as "Apollo answered but has no device
+    API". Only a console's own address can serve /proxy/apollo.
+    """
+    host = host.lower()
+    return host == "ui.com" or host.endswith(".ui.com")
+
+
 class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for UniFi Play."""
 
@@ -45,6 +56,14 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
 
             api = UnifiPlayApi(host, api_key)
             normalized_host = api.host
+
+            if _is_ui_cloud_host(normalized_host):
+                await api.close()
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=STEP_USER_DATA_SCHEMA,
+                    errors={"base": "cloud_host"},
+                )
 
             await self.async_set_unique_id(normalized_host)
             self._abort_if_unique_id_configured()

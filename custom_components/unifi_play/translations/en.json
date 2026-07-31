@@ -16,6 +16,7 @@
       "forbidden": "The console refused the API key (HTTP 403). API keys are per-console, so check the key was created on the console you entered and has not been revoked.",
       "apollo_unavailable": "This console has no Apollo application, which is what serves the UniFi Play API. Apollo installs itself automatically when the console discovers UniFi Play hardware (PowerAmp or Play Audio Port) — look for an Apollo section in UniFi OS. If your Play devices are managed by a different console, point this integration at that one instead.",
       "unsupported_api": "The Apollo application answered but has no device API at the expected path. Your Apollo version may be newer or older than this integration supports — please open an issue including your console firmware and Apollo version.",
+      "cloud_host": "That address is Ubiquiti's cloud (ui.com), which serves the Site Manager API — a different API that does not proxy Apollo, so this integration cannot use it. Enter your console's own IP address or local hostname instead, with an API key created on that console (Settings → Control Plane → API Keys).",
       "unknown": "Unexpected error. Check the Home Assistant logs for details."
     },
     "abort": {

@@ -35,8 +35,13 @@ an HTML body** — not 404, and regardless of credentials. See
 [Distinguishing failures](#distinguishing-failures).
 
 Per-model support is tracked in `/data/unifi-core/config/consoleGroup.yaml` under
-`applications:`; an `apollo: supported: false` there would mean that console can never
-run Apollo.
+`applications:` — **on the UDM Pro, where this was observed**. An
+`apollo: supported: false` there would mean that console can never run Apollo. This
+does not port to UniFi OS 5.x: on a UCG-Fiber running 5.1.19 the file is ~113 bytes
+with no `applications:` block at all, while `apollo` still appears in
+`config/runnables.yaml` and the application logs
+([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)). Where (or whether) the
+catalogue lives on that platform is an open question.
 
 ## Architecture
 
@@ -92,6 +97,11 @@ Status code alone is ambiguous. Branch on content type:
 | `404` + `text/plain` | Apollo's own Go 404 — installed, but no handler at that path |
 
 A `resp.ok`-style check will sail past the HTML case and then fail on JSON decode.
+
+One more trap: `api.ui.com` (Ubiquiti's Site Manager cloud API) answers the Apollo
+path with a JSON `404`, which reads identically to "Apollo installed, no handler".
+Nothing at ui.com proxies Apollo — the config flow refuses ui.com hosts outright for
+this reason.
 
 ### Endpoints
 
