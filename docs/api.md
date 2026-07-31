@@ -43,14 +43,19 @@ an HTML body** — not 404, and regardless of credentials. See
 hold ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)):
 
 1. An Apollo-line device is discovered on the console.
-2. The console's release channel is high enough that a published `apollo` package
-   exists. Apollo appears to be published on `release-candidate` and `beta` **only,
-   never on `release`** (Official).
+2. A published `apollo` package exists at or below the console's release channel.
 
-The channel lives in `/data/unifi-core/config/firmware.yaml` as `releaseChannel`, and
-surfaces in the logs as `max_release_channel`. `runnables.yaml` carries a
-`releaseChannels:` map naming a channel per application, and an `updates:` map holding
-any pinned version.
+The console's channel lives in `/data/unifi-core/config/firmware.yaml` as
+`releaseChannel` (`release`, `release-candidate`, `beta`) and surfaces in the logs as
+`max_release_channel`. `runnables.yaml` carries a `releaseChannels:` map naming a
+channel per application, plus an `updates:` map holding any pinned version.
+
+**Apollo's entry in that map is per-console, not global:** `release-candidate` on a UDM
+Pro versus `beta` on a UCG-Fiber. Availability therefore appears staged per model, and
+nothing here establishes that Apollo is withheld from `release` in general — a working
+UDM Pro on `release-candidate` is a single positive observation, and UniFi Play hardware
+is generally available at retail. Treat "which channel is Apollo published at for *this*
+console" as the question, not "is Apollo on Official".
 
 **Apollo is not distributed through apt.** On a working UDM Pro, `apt-cache policy
 apollo` reports `0.7.4` with its only source `/var/lib/dpkg/status` — no repository

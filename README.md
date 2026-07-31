@@ -34,35 +34,48 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
     therefore no API to connect to.
 - One or more UniFi Play **hardware devices** (PowerAmp, Play Audio Port) discovered by
   that console
-- **A console on the `release-candidate` or `beta` update channel** — see below
 - An API key created on that same console (**Settings → Control Plane → API Keys**)
 
-> ### The release channel requirement
+> ### When a console never installs Apollo
 >
-> Apollo appears to be published on **release-candidate and beta only, never on
-> Official** (`release`). A console on Official never fetches the package, however many
-> Play devices it has adopted — so this is a hard prerequisite, not a tuning knob.
+> Apollo's availability looks to be **staged per console model and update channel**, and
+> the staging is recorded on the console itself. `/data/unifi-core/config/runnables.yaml`
+> holds a `releaseChannels:` map naming the channel Apollo is published at *for that
+> console*, and the observed values differ — `release-candidate` on a UDM Pro, `beta` on
+> a UCG-Fiber ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)). So this is
+> not a fixed property of the package, and Apollo reaching Official on a given model is
+> expected rather than ruled out.
 >
-> Two gates must both be satisfied before a console installs Apollo:
+> Two conditions must both hold before a console fetches Apollo:
 >
 > 1. **An Apollo-line device is discovered on it.** `apollo` is the only application in
 >    UniFi OS's catalogue flagged `installOnDeviceDiscovery: true`, and that discovery
 >    is what triggers the fetch.
-> 2. **The console's channel is high enough for a published package to exist.**
+> 2. **A published package exists at or below the console's own channel**
+>    (`releaseChannel` in `firmware.yaml`, seen in the logs as `max_release_channel`).
 >
-> Neither alone is enough. A working UDM Pro was observed sitting on
-> `release-candidate` for six months logging `Package "apollo" not installed` on every
-> boot, then installing Apollo the day an Apollo device appeared
-> ([#4](https://github.com/willbeeching/ha-unifiplay/issues/4)).
+> Neither alone is enough. A UDM Pro on `release-candidate` sat for six months logging
+> `Package "apollo" not installed` on every boot, then installed Apollo the day an
+> Apollo device appeared.
 >
-> Check yours with `grep -i releaseChannel /data/unifi-core/config/firmware.yaml`
-> (values: `release`, `release-candidate`, `beta`).
+> If Apollo never installs, compare the two values:
 >
-> **Weigh this before changing it.** Moving off Official puts your entire console on
-> pre-release firmware, which on a gateway that routes your household is a real cost.
-> Apollo is not delivered through apt, so there is no repository you can add to get the
-> package while staying on Official — `unifi-core` fetches the `.deb` directly from
-> Ubiquiti, gated by the console's channel.
+> ```bash
+> grep -i releaseChannel /data/unifi-core/config/firmware.yaml      # what this console accepts
+> grep -A10 releaseChannels /data/unifi-core/config/runnables.yaml  # where apollo is published
+> ```
+>
+> If Apollo's channel sits above your console's, the package has not been released for
+> your model at your channel yet. Raising the console's channel is one option, but it
+> puts the whole console on pre-release firmware — a real cost on a gateway that routes
+> your household, and worth weighing against simply waiting. There is no repository to
+> add instead: Apollo is not distributed through apt, and `unifi-core` fetches the `.deb`
+> directly from Ubiquiti.
+>
+> **Reports so far:** working on UDM Pro; never installing on UCG-Fiber or Cloud Key
+> Plus. UniFi Play hardware is generally available at retail, so a supported console on
+> Official is expected to get Apollo in time — please add your model to
+> [#4](https://github.com/willbeeching/ha-unifiplay/issues/4) either way.
 
 > **Devices in UniFi Network are a separate matter.** A Cloud Key Plus has been
 > reported listing five Audio Ports in UniFi Network while never gaining an Apollo
@@ -150,7 +163,7 @@ Setup reports a specific reason for each failure. Find your message below:
 | **Could not reach the console** | No HTTP response at all — wrong address, not routable from HA, or a timeout | Enter only the IP or hostname (e.g. `192.168.10.1`), without `https://`. Confirm Home Assistant can reach it. |
 | **The console rejected the API key (HTTP 401)** | Purely a credential problem. A 401 means the Apollo route exists and its auth layer turned you away — so Apollo *is* installed | Paste a fresh key from **Settings → Control Plane → API Keys** on this console, whole and untruncated. |
 | **The console refused the API key (HTTP 403)** | Key is valid but not for this console, or revoked | API keys are per-console — create the key on the same console you entered. |
-| **This console has no Apollo application** | The console answered with its web UI instead of an API, meaning no Apollo route exists | Most often the console is on the **Official** update channel, which never receives Apollo — see [The release channel requirement](#the-release-channel-requirement). Otherwise confirm this is the console that discovered your Play hardware, and if the hardware is new give it time (a reboot forces the issue). |
+| **This console has no Apollo application** | The console answered with its web UI instead of an API, meaning no Apollo route exists | Confirm this is the console your Play hardware is adopted to, and if the hardware is new give it time to be discovered (a reboot forces the issue). Some console models do not get Apollo at all on their current update channel — see [When a console never installs Apollo](#when-a-console-never-installs-apollo). |
 | **Apollo answered but has no device API** | Apollo is installed but does not serve the expected path — a version mismatch | Please open an issue with your console firmware and Apollo version. |
 | **That address is Ubiquiti's cloud (ui.com)** | You entered `api.ui.com` or another ui.com address. That is the Site Manager cloud API — a different API that does not proxy Apollo | Enter your console's own local IP or hostname, with a key created on that console. |
 

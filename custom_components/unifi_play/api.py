@@ -58,10 +58,10 @@ class UnifiPlayServiceUnavailableError(UnifiPlayApiError):
     body — regardless of whether the API key is valid. So HTML is the signal,
     not the status code.
 
-    The usual cause is the console's update channel: Apollo is published on
-    release-candidate and beta only, so a console tracking Official never
-    fetches the package however many Play devices it has adopted. See
-    docs/api.md for the full install gate.
+    A console installs Apollo only when it discovers Play hardware *and* a
+    published package exists at or below its release channel. Apollo's channel
+    is recorded per console in runnables.yaml and has been seen to differ by
+    model, so some consoles never receive it. See docs/api.md.
     """
 
 
