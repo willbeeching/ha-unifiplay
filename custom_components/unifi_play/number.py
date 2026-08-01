@@ -14,9 +14,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, is_amp
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
-from .entity import UnifiPlayEntity
+from .entity import UnifiPlayEntity, async_setup_platform_entities
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -25,6 +25,7 @@ class UnifiPlayNumberDescription(NumberEntityDescription):
 
     value_fn: Callable[[UnifiPlayDeviceState], float]
     set_fn: str
+    amp_only: bool = False
 
 
 NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
@@ -91,6 +92,7 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
         mode=NumberMode.SLIDER,
         value_fn=lambda s: float(s.sub_crossover),
         set_fn="set_sub_crossover",
+        amp_only=True,
     ),
     UnifiPlayNumberDescription(
         key="sub_level",
@@ -103,6 +105,7 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
         mode=NumberMode.SLIDER,
         value_fn=lambda s: float(s.sub_level),
         set_fn="set_sub_level",
+        amp_only=True,
     ),
 )
 
@@ -114,11 +117,16 @@ async def async_setup_entry(
 ) -> None:
     """Set up UniFi Play number entities."""
     coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[UnifiPlayNumber] = []
-    for device_id in coordinator.data:
-        for desc in NUMBERS:
-            entities.append(UnifiPlayNumber(coordinator, device_id, desc))
-    async_add_entities(entities)
+
+    def _factory(device_id: str) -> list[UnifiPlayNumber]:
+        state = coordinator.data[device_id]
+        return [
+            UnifiPlayNumber(coordinator, device_id, desc)
+            for desc in NUMBERS
+            if not desc.amp_only or is_amp(state.platform)
+        ]
+
+    async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
 
 
 class UnifiPlayNumber(UnifiPlayEntity, NumberEntity):

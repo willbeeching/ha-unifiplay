@@ -17,9 +17,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, SOURCE_REVERSE, source_label, source_labels
 from .coordinator import UnifiPlayCoordinator
-from .entity import UnifiPlayEntity
+from .entity import UnifiPlayEntity, async_setup_platform_entities
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,15 +31,6 @@ SUPPORTED_FEATURES = (
     | MediaPlayerEntityFeature.SELECT_SOURCE
 )
 
-# HDMI eARC is exposed as "spdif" in the MQTT protocol (verified on UPL-AMP).
-SOURCE_DEVICE_VALUES = {
-    "streaming": "Streaming",
-    "spdif": "HDMI eARC",
-    "lineIn": "Line In",
-}
-SOURCE_ALIASES = {"hdmi": "spdif"}
-SOURCE_REVERSE = {v: k for k, v in SOURCE_DEVICE_VALUES.items()}
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -49,11 +40,10 @@ async def async_setup_entry(
     """Set up UniFi Play media players from a config entry."""
     coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = [
-        UnifiPlayMediaPlayer(coordinator, device_id) for device_id in coordinator.data
-    ]
+    def _factory(device_id: str) -> list[UnifiPlayMediaPlayer]:
+        return [UnifiPlayMediaPlayer(coordinator, device_id)]
 
-    async_add_entities(entities, True)
+    async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
 
 
 class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
@@ -150,15 +140,12 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
 
     @property
     def source(self) -> str | None:
-        device_source = self._device_state.source
-        if not device_source:
-            return None
-        canonical = SOURCE_ALIASES.get(device_source, device_source)
-        return SOURCE_DEVICE_VALUES.get(canonical, device_source)
+        ds = self._device_state
+        return source_label(ds.platform, ds.source)
 
     @property
     def source_list(self) -> list[str]:
-        return list(SOURCE_DEVICE_VALUES.values())
+        return list(source_labels(self._device_state.platform).values())
 
     async def async_select_source(self, source: str) -> None:
         device_value = SOURCE_REVERSE.get(source)

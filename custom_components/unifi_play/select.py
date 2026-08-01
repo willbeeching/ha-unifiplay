@@ -10,9 +10,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    SOURCE_REVERSE,
+    is_amp,
+    source_label,
+    source_labels,
+)
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
-from .entity import UnifiPlayEntity
+from .entity import UnifiPlayEntity, async_setup_platform_entities
 
 PHASE_OPTIONS = {"0": "0\u00b0", "180": "180\u00b0"}
 PHASE_REVERSE = {v: k for k, v in PHASE_OPTIONS.items()}
@@ -22,23 +28,6 @@ CHANNEL_REVERSE = {v: k for k, v in CHANNEL_OPTIONS.items()}
 
 EQ_PRESET_OPTIONS = ["Custom", "Music", "Movie", "Night", "Off"]
 
-# HDMI eARC is exposed as "spdif" in the MQTT protocol (verified on UPL-AMP).
-SOURCE_DEVICE_VALUES = {
-    "streaming": "Streaming",
-    "spdif": "HDMI eARC",
-    "lineIn": "Line In",
-}
-SOURCE_ALIASES = {"hdmi": "spdif"}
-SOURCE_REVERSE = {v: k for k, v in SOURCE_DEVICE_VALUES.items()}
-
-
-def _source_display_name(device_source: str | None) -> str | None:
-    """Map a device source value to the select option label."""
-    if not device_source:
-        return None
-    canonical = SOURCE_ALIASES.get(device_source, device_source)
-    return SOURCE_DEVICE_VALUES.get(canonical)
-
 
 @dataclass(frozen=True, kw_only=True)
 class UnifiPlaySelectDescription(SelectEntityDescription):
@@ -47,6 +36,8 @@ class UnifiPlaySelectDescription(SelectEntityDescription):
     value_fn: Callable[[UnifiPlayDeviceState], str | None]
     set_fn: str
     convert_fn: Callable[[str], str | int]
+    amp_only: bool = False
+    options_fn: Callable[[UnifiPlayDeviceState], list[str]] | None = None
 
 
 SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
@@ -55,8 +46,9 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
         translation_key="audio_input",
         name="Audio Input",
         icon="mdi:audio-input-stereo-minijack",
-        options=list(SOURCE_DEVICE_VALUES.values()),
-        value_fn=lambda s: _source_display_name(s.source),
+        options=[],
+        options_fn=lambda s: list(source_labels(s.platform).values()),
+        value_fn=lambda s: source_label(s.platform, s.source),
         set_fn="set_source",
         convert_fn=lambda v: SOURCE_REVERSE[v],
     ),
@@ -79,6 +71,7 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
         value_fn=lambda s: PHASE_OPTIONS.get(str(s.sub_phase)),
         set_fn="set_sub_phase",
         convert_fn=lambda v: int(PHASE_REVERSE[v]),
+        amp_only=True,
     ),
     UnifiPlaySelectDescription(
         key="channels",
@@ -100,11 +93,16 @@ async def async_setup_entry(
 ) -> None:
     """Set up UniFi Play select entities."""
     coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[UnifiPlaySelect] = []
-    for device_id in coordinator.data:
-        for desc in SELECTS:
-            entities.append(UnifiPlaySelect(coordinator, device_id, desc))
-    async_add_entities(entities)
+
+    def _factory(device_id: str) -> list[UnifiPlaySelect]:
+        state = coordinator.data[device_id]
+        return [
+            UnifiPlaySelect(coordinator, device_id, desc)
+            for desc in SELECTS
+            if not desc.amp_only or is_amp(state.platform)
+        ]
+
+    async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
 
 
 class UnifiPlaySelect(UnifiPlayEntity, SelectEntity):
@@ -121,6 +119,12 @@ class UnifiPlaySelect(UnifiPlayEntity, SelectEntity):
         super().__init__(coordinator, device_id)
         self.entity_description = description
         self._attr_unique_id = f"unifi_play_{self._device_state.mac}_{description.key}"
+
+    @property
+    def options(self) -> list[str]:
+        if self.entity_description.options_fn is not None:
+            return self.entity_description.options_fn(self._device_state)
+        return list(self.entity_description.options or [])
 
     @property
     def current_option(self) -> str | None:

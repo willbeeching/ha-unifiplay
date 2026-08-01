@@ -19,6 +19,56 @@ MQTT_KEEPALIVE = 60
 
 TOPIC_MOBILE = "UPL-MOB"
 
+# Platform identifiers. The console/UDP discovery report "UPL-AMP"/"UPL-PORT";
+# a device identified through its own MQTT broker is known only by its topic
+# root, which for Port hardware is "UPL-DEVICE" (#4).
+PLATFORM_AMP = "UPL-AMP"
+
+MODEL_NAMES = {
+    "UPL-AMP": "PowerAmp",
+    "UPL-PORT": "Play Audio Port",
+    "UPL-DEVICE": "Play Audio Port",
+}
+
+
+def is_amp(platform: str) -> bool:
+    """True when the device is a PowerAmp (subwoofer, HDMI eARC)."""
+    return platform == PLATFORM_AMP
+
+
+# The device value "spdif" is the HDMI eARC jack on a PowerAmp and the
+# optical S/PDIF input on an Audio Port; label it per platform.
+SOURCE_LABELS_AMP = {
+    "streaming": "Streaming",
+    "spdif": "HDMI eARC",
+    "lineIn": "Line In",
+}
+SOURCE_LABELS_PORT = {
+    "streaming": "Streaming",
+    "spdif": "S/PDIF",
+    "lineIn": "Line In",
+}
+SOURCE_ALIASES = {"hdmi": "spdif"}
+# Any label from either platform maps back to its device value.
+SOURCE_REVERSE = {
+    label: value
+    for labels in (SOURCE_LABELS_AMP, SOURCE_LABELS_PORT)
+    for value, label in labels.items()
+}
+
+
+def source_labels(platform: str) -> dict[str, str]:
+    """Device source value -> display label for this platform."""
+    return SOURCE_LABELS_AMP if is_amp(platform) else SOURCE_LABELS_PORT
+
+
+def source_label(platform: str, device_source: str | None) -> str | None:
+    """Display label for a device-reported source value."""
+    if not device_source:
+        return None
+    canonical = SOURCE_ALIASES.get(device_source, device_source)
+    return source_labels(platform).get(canonical, device_source)
+
 BINME_TYPE_HEADER = 0x01
 BINME_TYPE_BODY = 0x02
 BINME_FORMAT_JSON = 0x01

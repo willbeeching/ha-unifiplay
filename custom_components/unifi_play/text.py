@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import UnifiPlayCoordinator
-from .entity import UnifiPlayEntity
+from .entity import UnifiPlayEntity, async_setup_platform_entities
 
 HEX_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
 
@@ -23,10 +23,11 @@ async def async_setup_entry(
 ) -> None:
     """Set up UniFi Play text entities."""
     coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[UnifiPlayLedColorText] = []
-    for device_id in coordinator.data:
-        entities.append(UnifiPlayLedColorText(coordinator, device_id))
-    async_add_entities(entities)
+
+    def _factory(device_id: str) -> list[UnifiPlayLedColorText]:
+        return [UnifiPlayLedColorText(coordinator, device_id)]
+
+    async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
 
 
 class UnifiPlayLedColorText(UnifiPlayEntity, TextEntity):

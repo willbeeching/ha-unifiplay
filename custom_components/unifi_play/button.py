@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import UnifiPlayCoordinator
-from .entity import UnifiPlayEntity
+from .entity import UnifiPlayEntity, async_setup_platform_entities
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -46,11 +46,11 @@ async def async_setup_entry(
 ) -> None:
     """Set up UniFi Play button entities."""
     coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[UnifiPlayButton] = []
-    for device_id in coordinator.data:
-        for desc in BUTTONS:
-            entities.append(UnifiPlayButton(coordinator, device_id, desc))
-    async_add_entities(entities)
+
+    def _factory(device_id: str) -> list[UnifiPlayButton]:
+        return [UnifiPlayButton(coordinator, device_id, desc) for desc in BUTTONS]
+
+    async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
 
 
 class UnifiPlayButton(UnifiPlayEntity, ButtonEntity):
