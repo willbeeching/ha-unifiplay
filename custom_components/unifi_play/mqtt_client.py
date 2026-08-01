@@ -213,6 +213,18 @@ class UnifiPlayMqttClient:
         """Set audio input source (streaming, lineIn, spdif for HDMI eARC)."""
         self.publish_action("set_audio_src", {"source": source})
 
+    def set_output(self, out: str) -> None:
+        """Set audio output routing (lineOut, spdif, usb) - Audio Port only."""
+        self.publish_action("set_audio_src", {"out": out})
+
+    def request_extra_info(self) -> None:
+        """Request network/firmware details (platform, version, uptime)."""
+        self.publish_action("extra_info")
+
+    def request_metadata(self) -> None:
+        """Request current now-playing metadata."""
+        self.publish_action("metadata")
+
     def set_loudness(self, enabled: bool) -> None:
         """Enable or disable Dynamic Boost (loudness)."""
         self.publish_action("set_loudness", {"loudness": enabled})

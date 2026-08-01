@@ -12,6 +12,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     DOMAIN,
+    OUTPUT_LABELS,
+    OUTPUT_REVERSE,
     SOURCE_REVERSE,
     is_amp,
     source_label,
@@ -37,6 +39,7 @@ class UnifiPlaySelectDescription(SelectEntityDescription):
     set_fn: str
     convert_fn: Callable[[str], str | int]
     amp_only: bool = False
+    port_only: bool = False
     options_fn: Callable[[UnifiPlayDeviceState], list[str]] | None = None
 
 
@@ -51,6 +54,17 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
         value_fn=lambda s: source_label(s.platform, s.source),
         set_fn="set_source",
         convert_fn=lambda v: SOURCE_REVERSE[v],
+    ),
+    UnifiPlaySelectDescription(
+        key="audio_output",
+        translation_key="audio_output",
+        name="Audio Output",
+        icon="mdi:audio-input-rca",
+        options=list(OUTPUT_LABELS.values()),
+        value_fn=lambda s: OUTPUT_LABELS.get(s.out) if s.out else None,
+        set_fn="set_output",
+        convert_fn=lambda v: OUTPUT_REVERSE[v],
+        port_only=True,
     ),
     UnifiPlaySelectDescription(
         key="eq_preset",
@@ -99,7 +113,8 @@ async def async_setup_entry(
         return [
             UnifiPlaySelect(coordinator, device_id, desc)
             for desc in SELECTS
-            if not desc.amp_only or is_amp(state.platform)
+            if (not desc.amp_only or is_amp(state.platform))
+            and (not desc.port_only or not is_amp(state.platform))
         ]
 
     async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)

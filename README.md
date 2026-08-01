@@ -96,10 +96,14 @@ All communication stays local on your network.
 
 | Platform | Device | Tested |
 |----------|--------|--------|
-| `UPL-AMP` | PowerAmp | Yes |
-| `UPL-PORT` | In-Wall Port | Community-reported, not hardware-tested by maintainer |
+| `UPL-AMP` | PowerAmp | Yes (maintainer hardware) |
+| `UPL-PORT` | Audio Port | Community-confirmed working (direct connection; see #4) |
 
-Both device types use the same discovery and MQTT control paths. If you run into device-specific issues (for example on a Port), please include the device platform from the logs when opening an issue.
+Ports don't answer UDP discovery, so always enter their IPs during direct-connection
+setup. Port-specific notes: no subwoofer entities, `spdif` is the optical S/PDIF jack,
+and an **Audio Output** select (Line Out / S/PDIF / USB) exists only on Ports. If you
+run into device-specific issues, please include the device platform from the logs when
+opening an issue — and attach a `scripts/dump_device.py` capture if you can.
 
 ## Troubleshooting
 

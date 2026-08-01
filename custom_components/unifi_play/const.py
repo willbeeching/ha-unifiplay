@@ -47,7 +47,17 @@ SOURCE_LABELS_PORT = {
     "streaming": "Streaming",
     "spdif": "S/PDIF",
     "lineIn": "Line In",
+    "speakers": "Speakers",
 }
+
+# Audio Port output routing (set_audio_src with an "out" body key; captured
+# from the official app in #4).
+OUTPUT_LABELS = {
+    "lineOut": "Line Out",
+    "spdif": "S/PDIF",
+    "usb": "USB",
+}
+OUTPUT_REVERSE = {v: k for k, v in OUTPUT_LABELS.items()}
 SOURCE_ALIASES = {"hdmi": "spdif"}
 # Any label from either platform maps back to its device value.
 SOURCE_REVERSE = {

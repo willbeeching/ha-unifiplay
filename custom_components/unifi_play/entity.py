@@ -53,8 +53,16 @@ class UnifiPlayEntity(CoordinatorEntity[UnifiPlayCoordinator]):
     ) -> None:
         super().__init__(coordinator)
         self._device_id = device_id
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Live device info: platform and firmware can arrive after creation.
+
+        A device identified over MQTT starts as its topic root (UPL-DEVICE)
+        with no firmware; the extra_info event upgrades both.
+        """
         state = self._device_state
-        self._attr_device_info = DeviceInfo(
+        return DeviceInfo(
             identifiers={(DOMAIN, state.mac)},
             name=state.device_name or state.name,
             manufacturer="Ubiquiti",

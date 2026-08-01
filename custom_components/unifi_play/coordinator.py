@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
@@ -34,6 +35,7 @@ class UnifiPlayDeviceState:
         self.online: bool = False
         self.volume: int = 0
         self.source: str = ""
+        self.out: str = ""
         self.stream_playing: bool = False
         self.muted: bool = False
         self.device_name: str = self.name
@@ -67,6 +69,8 @@ class UnifiPlayDeviceState:
             self.volume = body["volume"]
         if "source" in body:
             self.source = body["source"]
+        if "out" in body:
+            self.out = body["out"]
         if "stream_playing" in body:
             self.stream_playing = body["stream_playing"]
         if "muted" in body:
@@ -120,7 +124,9 @@ class UnifiPlayDeviceState:
 
     def update_from_metadata(self, body: dict) -> None:
         """Update now-playing state from an MQTT 'metadata' event."""
-        if "song" in body:
+        if "title" in body:
+            self.now_playing_song = body["title"]
+        elif "song" in body:
             self.now_playing_song = body["song"]
         if "artist" in body:
             self.now_playing_artist = body["artist"]
@@ -136,6 +142,19 @@ class UnifiPlayDeviceState:
     def update_from_online(self, body: dict) -> None:
         """Update online status from an MQTT 'online' event."""
         self.online = body.get("status", 0) == 1
+
+    def update_from_extra_info(self, body: dict) -> None:
+        """Update device identity from an MQTT 'extra_info' event.
+
+        In direct mode a device identified through its MQTT topics is only
+        known by its topic root (UPL-DEVICE for a Port) with no firmware
+        version; extra_info carries the real platform and version.
+        """
+        if body.get("platform"):
+            self.platform = body["platform"]
+        if body.get("version"):
+            match = re.search(r"v?(\d+(?:\.\d+)+)", body["version"])
+            self.firmware = match.group(1) if match else body["version"]
 
 
 class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]]):
@@ -220,6 +239,8 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             await client.connect()
             await asyncio.sleep(0.5)
             client.request_info()
+            client.request_extra_info()
+            client.request_metadata()
         except Exception:
             state = self._device_states.get(device_id)
             platform = state.platform if state else "unknown"
@@ -252,6 +273,8 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             state.update_from_equalizer(body)
         elif event_name == "sub_audio":
             state.update_from_sub_audio(body)
+        elif event_name == "extra_info":
+            state.update_from_extra_info(body)
 
         self.async_set_updated_data(self._device_states)
 
