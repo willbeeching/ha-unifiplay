@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
+import aiohttp
 from homeassistant.components.media_player import (
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
@@ -12,6 +14,7 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -25,7 +28,17 @@ SUPPORTED_FEATURES = (
     | MediaPlayerEntityFeature.VOLUME_STEP
     | MediaPlayerEntityFeature.VOLUME_MUTE
     | MediaPlayerEntityFeature.TURN_OFF
+    | MediaPlayerEntityFeature.SELECT_SOURCE
 )
+
+# HDMI eARC is exposed as "spdif" in the MQTT protocol (verified on UPL-AMP).
+SOURCE_DEVICE_VALUES = {
+    "streaming": "Streaming",
+    "spdif": "HDMI eARC",
+    "lineIn": "Line In",
+}
+SOURCE_ALIASES = {"hdmi": "spdif"}
+SOURCE_REVERSE = {v: k for k, v in SOURCE_DEVICE_VALUES.items()}
 
 
 async def async_setup_entry(
@@ -101,6 +114,57 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
     def media_position(self) -> int | None:
         pos = self._device_state.now_playing_current
         return pos if pos > 0 else None
+
+    @property
+    def media_image_url(self) -> str | None:
+        """Cover art, served by the speaker itself.
+
+        The metadata event carries a bare file path; the official app fetches
+        it as https://{deviceIP}/{filename}.
+        """
+        cover = self._device_state.now_playing_cover
+        if not cover:
+            return None
+        if cover.startswith(("http://", "https://")):
+            return cover
+        ip = self._device_state.ip
+        if not ip:
+            return None
+        return f"https://{ip}/{cover.lstrip('/')}"
+
+    async def async_get_media_image(self) -> tuple[bytes | None, str | None]:
+        """Fetch the cover art ourselves: the speaker's cert is self-signed."""
+        url = self.media_image_url
+        if url is None:
+            return None, None
+        session = async_get_clientsession(self.hass, verify_ssl=False)
+        try:
+            async with asyncio.timeout(10):
+                response = await session.get(url)
+                if response.status != 200:
+                    return None, None
+                return await response.read(), response.content_type
+        except (TimeoutError, aiohttp.ClientError) as err:
+            _LOGGER.debug("Failed to fetch cover art from %s: %s", url, err)
+            return None, None
+
+    @property
+    def source(self) -> str | None:
+        device_source = self._device_state.source
+        if not device_source:
+            return None
+        canonical = SOURCE_ALIASES.get(device_source, device_source)
+        return SOURCE_DEVICE_VALUES.get(canonical, device_source)
+
+    @property
+    def source_list(self) -> list[str]:
+        return list(SOURCE_DEVICE_VALUES.values())
+
+    async def async_select_source(self, source: str) -> None:
+        device_value = SOURCE_REVERSE.get(source)
+        client = self._mqtt()
+        if client and device_value:
+            client.set_source(device_value)
 
     async def async_set_volume_level(self, volume: float) -> None:
         client = self._mqtt()
