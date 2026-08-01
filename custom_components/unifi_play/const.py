@@ -69,6 +69,7 @@ def source_label(platform: str, device_source: str | None) -> str | None:
     canonical = SOURCE_ALIASES.get(device_source, device_source)
     return source_labels(platform).get(canonical, device_source)
 
+
 BINME_TYPE_HEADER = 0x01
 BINME_TYPE_BODY = 0x02
 BINME_FORMAT_JSON = 0x01

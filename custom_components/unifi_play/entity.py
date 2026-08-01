@@ -35,9 +35,7 @@ def async_setup_platform_entities(
         if not new_ids:
             return
         known.update(new_ids)
-        async_add_entities(
-            [entity for dev_id in new_ids for entity in factory(dev_id)]
-        )
+        async_add_entities([entity for dev_id in new_ids for entity in factory(dev_id)])
 
     _sync()
     entry.async_on_unload(coordinator.async_add_listener(_sync))
