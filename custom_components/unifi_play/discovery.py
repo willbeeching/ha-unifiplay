@@ -1,10 +1,17 @@
 """Console-less discovery of UniFi Play devices.
 
-Play devices answer the standard Ubiquiti discovery protocol on UDP 10001
-(the same one the WiFiman app and the console's own discovery use), returning
-their hostname, MAC, IP, platform and firmware. A broadcast probe finds every
-device on the local subnet; a unicast probe reaches devices on other (routed)
-subnets, so users can list those IPs explicitly.
+Two probe mechanisms, tried in order:
+
+1. **UDP 10001** — the standard Ubiquiti discovery protocol (the same one the
+   WiFiman app uses), returning hostname, MAC, IP, platform and firmware.
+   Broadcast finds every device on the local subnet; unicast reaches devices
+   on other (routed) subnets. PowerAmps (UPL-AMP) answer this; Audio Ports
+   (UPL-PORT) have been reported not to (#5).
+2. **MQTT identification** — for a manually entered IP that ignores UDP:
+   connect to the device's own broker (TCP 8883, the same mTLS channel used
+   for control), subscribe with a wildcard, and read the device's retained
+   ``UPL-*/<MAC>/status`` topic to learn its MAC and platform, then request
+   ``info`` for its name.
 
 This is what lets the integration work without the console's Apollo
 application, which Ubiquiti has not released for every console model.
@@ -16,7 +23,16 @@ import asyncio
 import logging
 import re
 import socket
+import ssl
+import threading
+import time
+import uuid
 from typing import Any
+
+import paho.mqtt.client as mqtt
+
+from .const import MQTT_PORT, TOPIC_MOBILE
+from .mqtt_client import CERT_FILE, KEY_FILE, decode_binme, encode_binme
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -137,3 +153,136 @@ async def async_discover(
     finally:
         transport.close()
     return [_to_device_dict(p) for p in protocol.responses.values()]
+
+
+MQTT_PROBE_TIMEOUT = 8.0
+# After the retained status message identifies the device, how long to wait
+# for the info response that carries its friendly name.
+_MQTT_INFO_TIMEOUT = 2.5
+
+
+def _probe_mqtt_sync(ip: str, timeout: float) -> dict[str, Any] | None:
+    """Blocking MQTT identification probe; run via async_probe_mqtt.
+
+    Every Play device runs its own broker and publishes a retained
+    ``<platform>/<MAC>/status`` message, so a wildcard subscription
+    identifies the device without knowing anything but its IP. Needed for
+    UPL-PORT hardware, which does not answer the UDP discovery probe.
+    """
+    found: dict[str, Any] = {"ip": ip}
+    got_status = threading.Event()
+    got_info = threading.Event()
+    client_uuid = uuid.uuid4().hex[:12]
+    action_topic = f"{TOPIC_MOBILE}/{client_uuid}/action"
+
+    def on_connect(
+        client: mqtt.Client, userdata: Any, flags: Any, rc: Any, properties: Any = None
+    ) -> None:
+        client.subscribe("#")
+
+    def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
+        parts = msg.topic.split("/")
+        if (
+            len(parts) == 3
+            and parts[2] == "status"
+            and parts[0].startswith("UPL")
+            and not got_status.is_set()
+        ):
+            found["mac"] = parts[1].upper().replace(":", "")
+            found["platform"] = parts[0]
+            got_status.set()
+            header = {
+                "id": str(uuid.uuid4()),
+                "type": "request",
+                "timestamp": int(time.time() * 1000),
+                "action": "info",
+            }
+            client.publish(action_topic, encode_binme(header, {}))
+            return
+        try:
+            parsed = decode_binme(msg.payload)
+        except Exception:  # noqa: BLE001 - unknown payloads are expected here
+            return
+        header = parsed.get("header", {})
+        body = parsed.get("body", {})
+        if (
+            header.get("name", header.get("action")) == "info"
+            and isinstance(body, dict)
+            and body.get("deviceName")
+        ):
+            found["name"] = body["deviceName"]
+            got_info.set()
+
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"ha-unifiplay-probe-{client_uuid}",
+    )
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.tls_set(
+        certfile=str(CERT_FILE),
+        keyfile=str(KEY_FILE),
+        cert_reqs=ssl.CERT_NONE,
+        tls_version=ssl.PROTOCOL_TLS_CLIENT,
+    )
+    client.tls_insecure_set(True)
+    try:
+        client.connect(ip, MQTT_PORT, 15)
+    except OSError as err:
+        _LOGGER.debug("MQTT probe could not connect to %s: %s", ip, err)
+        return None
+    client.loop_start()
+    try:
+        got_status.wait(timeout)
+        if got_status.is_set():
+            got_info.wait(_MQTT_INFO_TIMEOUT)
+    finally:
+        client.loop_stop()
+        client.disconnect()
+
+    if "mac" not in found:
+        _LOGGER.debug(
+            "MQTT probe connected to %s but saw no retained UPL status topic", ip
+        )
+        return None
+    _LOGGER.debug(
+        "MQTT probe identified %s: %s (%s)",
+        ip,
+        found.get("name", "?"),
+        found["platform"],
+    )
+    return {
+        "id": found["mac"],
+        "name": found.get("name", "UniFi Play"),
+        "mac": found["mac"],
+        "platform": found["platform"],
+        "firmware": "",
+        "ip": ip,
+    }
+
+
+async def async_probe_mqtt(
+    ip: str, timeout: float = MQTT_PROBE_TIMEOUT
+) -> dict[str, Any] | None:
+    """Identify a Play device by connecting to its MQTT broker."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _probe_mqtt_sync, ip, timeout)
+
+
+async def async_resolve_direct(
+    manual_hosts: list[str] | None = None,
+    known_ips: frozenset[str] | set[str] = frozenset(),
+) -> list[dict[str, Any]]:
+    """Full direct-mode discovery: UDP sweep, then MQTT fallback.
+
+    Manual hosts that answered neither the UDP probe nor a previous scan
+    (known_ips) are identified over MQTT — the path UPL-PORT needs.
+    """
+    manual_hosts = manual_hosts or []
+    devices = await async_discover(manual_hosts=manual_hosts)
+    answered = {d["ip"] for d in devices}
+    to_probe = [h for h in manual_hosts if h not in answered and h not in known_ips]
+    if to_probe:
+        results = await asyncio.gather(*(async_probe_mqtt(h) for h in to_probe))
+        devices.extend(dev for dev in results if dev)
+    return devices

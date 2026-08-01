@@ -33,7 +33,7 @@
       "unsupported_api": "The Apollo application answered but has no device API at the expected path. Your Apollo version may be newer or older than this integration supports — please open an issue including your console firmware and Apollo version.",
       "cloud_host": "That address is Ubiquiti's cloud (ui.com), which serves the Site Manager API — a different API that does not proxy Apollo, so this integration cannot use it. Enter your console's own IP address or local hostname instead, with an API key created on that console (Settings → Control Plane → API Keys).",
       "no_devices_found": "No UniFi Play devices answered on Home Assistant's subnet. If your speakers are on a different VLAN or subnet, enter their IP addresses in the field above. Otherwise check they are powered on and reachable from Home Assistant.",
-      "no_response": "The addresses you entered did not answer the discovery probe (UDP port 10001). Check each IP is correct and that no firewall rule blocks UDP 10001 between Home Assistant and the speakers.",
+      "no_response": "The addresses you entered answered neither the discovery probe (UDP 10001) nor an MQTT connection (TCP 8883). Check each IP is correct and that no firewall rule blocks those ports between Home Assistant and the speakers.",
       "discovery_failed": "Could not open a discovery socket. Check the Home Assistant logs for details.",
       "unknown": "Unexpected error. Check the Home Assistant logs for details."
     },

@@ -25,7 +25,7 @@ from .const import (
     MODE_CONSOLE,
     MODE_DIRECT,
 )
-from .discovery import async_discover
+from .discovery import async_resolve_direct
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
 
             try:
-                found = await async_discover(manual_hosts=manual_hosts)
+                found = await async_resolve_direct(manual_hosts=manual_hosts)
             except OSError:
                 _LOGGER.exception("UniFi Play direct discovery failed")
                 found = []

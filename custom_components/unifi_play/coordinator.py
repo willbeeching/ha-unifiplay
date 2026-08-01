@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import UnifiPlayApi, UnifiPlayApiError
-from .discovery import async_discover
+from .discovery import async_resolve_direct
 from .mqtt_client import UnifiPlayMqttClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -172,8 +172,14 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             except UnifiPlayApiError as err:
                 raise UpdateFailed(f"Error fetching devices: {err}") from err
         else:
+            # Manual hosts already tracked as devices are excluded from the
+            # MQTT fallback probe — no point opening a second TLS connection
+            # to a speaker we hold a live connection to.
+            known_ips = {s.ip for s in self._device_states.values() if s.ip}
             try:
-                devices = await async_discover(manual_hosts=self.manual_hosts)
+                devices = await async_resolve_direct(
+                    manual_hosts=self.manual_hosts, known_ips=known_ips
+                )
             except OSError as err:
                 raise UpdateFailed(f"Discovery socket error: {err}") from err
 

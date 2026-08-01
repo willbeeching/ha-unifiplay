@@ -62,12 +62,13 @@ and pick a connection mode.
 ### Direct connection (no console needed)
 
 1. Choose **Direct connection**
-2. If your speakers are on the same subnet as Home Assistant, leave the field empty —
+2. If your PowerAmps are on the same subnet as Home Assistant, leave the field empty —
    they are found automatically
-3. If they are on a different VLAN or subnet, enter their IP addresses (comma
-   separated). You can read them from the UniFi Network client list or the Play
-   mobile app. Make sure nothing blocks UDP 10001 and TCP 8883 between Home
-   Assistant and the speakers
+3. Enter IP addresses (comma separated) for speakers on other VLANs/subnets — and
+   **always for Audio Ports (`UPL-PORT`)**, which don't answer the automatic probe.
+   You can read the IPs from the UniFi Network client list or the Play mobile app.
+   Make sure nothing blocks UDP 10001 and TCP 8883 between Home Assistant and the
+   speakers
 4. New devices are re-scanned for every 5 minutes
 
 ### Via UniFi OS Console
@@ -106,10 +107,15 @@ Both device types use the same discovery and MQTT control paths. If you run into
 
 | Message | Cause | Fix |
 |---------|-------|-----|
-| **No UniFi Play devices answered on Home Assistant's subnet** | The broadcast probe got no reply — the speakers are on a different VLAN/subnet, or unreachable | Enter the speakers' IP addresses in the setup field; they will be probed directly (works across VLANs). |
-| **The addresses you entered did not answer the discovery probe** | Wrong IP, device offline, or a firewall dropping UDP 10001 | Verify the IPs, and allow UDP 10001 (discovery) and TCP 8883 (MQTT) from Home Assistant to the speakers. |
+| **No UniFi Play devices answered on Home Assistant's subnet** | The broadcast probe got no reply — the speakers are on a different VLAN/subnet, unreachable, or are UPL-PORT hardware (which does not answer the UDP probe) | Enter the speakers' IP addresses in the setup field; each is then probed directly over UDP and, failing that, identified over MQTT (works across VLANs and on Ports). |
+| **The addresses you entered answered neither the discovery probe nor an MQTT connection** | Wrong IP, device offline, or a firewall dropping the traffic | Verify the IPs, and allow UDP 10001 (discovery) and TCP 8883 (MQTT) from Home Assistant to the speakers. |
 
-To test the discovery probe by hand from any machine that can reach the speaker:
+**Audio Port (`UPL-PORT`) owners: always enter the Port's IP address.** Ports have
+been reported not to answer the UDP discovery probe at all (issue #5), so automatic
+subnet discovery cannot find them — but given an IP, the integration identifies the
+device through its MQTT broker instead, which Ports do serve.
+
+To test the UDP discovery probe by hand from any machine that can reach the speaker:
 
 ```bash
 python3 -c "

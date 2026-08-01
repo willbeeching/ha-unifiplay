@@ -22,8 +22,6 @@ from .const import (
     BINME_TYPE_HEADER,
     MQTT_KEEPALIVE,
     MQTT_PORT,
-    TOPIC_AMP,
-    TOPIC_DEVICE,
     TOPIC_MOBILE,
 )
 
@@ -109,11 +107,10 @@ class UnifiPlayMqttClient:
         properties: Any = None,
     ) -> None:
         _LOGGER.debug("MQTT connected to %s: %s", self._device_ip, rc)
-        topics = [
-            (f"{TOPIC_AMP}/{self._device_mac}/status", 0),
-            (f"{TOPIC_DEVICE}/{self._device_mac}/status", 0),
-        ]
-        client.subscribe(topics)
+        # Wildcard on the platform segment: PowerAmps publish under UPL-AMP,
+        # other hardware under its own prefix (UPL-DEVICE, UPL-PORT, ...), and
+        # the broker is the device itself so this matches only its own topics.
+        client.subscribe(f"+/{self._device_mac}/status")
         self._connected.set()
 
     def _on_disconnect(
