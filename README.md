@@ -167,6 +167,13 @@ see [docs/apollo.md](docs/apollo.md).
 
 For anything else, enable debug logging (**Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging**), retry setup, and share lines containing `custom_components.unifi_play` in a GitHub issue (redact your API key). At debug level the integration logs the exact URL requested, HTTP status, and response body.
 
+## Support
+
+This was reverse-engineered and vibe-coded over many late nights, and the AI tokens don't pay for
+themselves. If this integration ever saved you reaching for your phone to turn the music down,
+consider [buying me some AI tokens](https://buymeacoffee.com/willbeeching) ☕🤖. Entirely optional —
+bug reports and stars are appreciated just as much.
+
 ## License
 
 [MIT](LICENSE)
