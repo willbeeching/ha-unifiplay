@@ -48,6 +48,7 @@ SOURCE_LABELS_PORT = {
     "spdif": "S/PDIF",
     "lineIn": "Line In",
     "speakers": "Speakers",
+    "usb": "USB",
 }
 
 # Audio Port output routing (set_audio_src with an "out" body key; captured

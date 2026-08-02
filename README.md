@@ -10,8 +10,10 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 
 ## Features
 
-- **Media player** — volume, mute, now-playing metadata (song, artist, album)
-- **Selects** — audio input (Streaming / HDMI eARC / Line In), EQ preset, sub phase, channels (stereo/mono)
+- **Media player** — volume, mute, now-playing metadata (song, artist, album), cover
+  art, and transport control (play / pause / next / previous) while streaming
+- **Selects** — audio input, audio output (Ports), EQ preset, sub phase, channels
+  (stereo/mono)
 - **Switches** — Dynamic Boost, Dolby Atmos / Equalizer, persistent dashboard
 - **Number controls** — balance, volume limit, screen brightness, LED brightness, sub crossover, sub level
 - **Text** — LED color (hex)
@@ -101,9 +103,18 @@ All communication stays local on your network.
 
 Ports don't answer UDP discovery, so always enter their IPs during direct-connection
 setup. Port-specific notes: no subwoofer entities, `spdif` is the optical S/PDIF jack,
-and an **Audio Output** select (Line Out / S/PDIF / USB) exists only on Ports. If you
-run into device-specific issues, please include the device platform from the logs when
-opening an issue — and attach a `scripts/dump_device.py` capture if you can.
+inputs include Speakers and USB, and an **Audio Output** select (Line Out / S/PDIF /
+USB) exists only on Ports. If you run into device-specific issues, please include the
+device platform from the logs when opening an issue — and attach a
+`scripts/dump_device.py` capture if you can.
+
+### Transport controls
+
+Play, pause, next and previous are relayed by the speaker to whatever is streaming to
+it (Cast, AirPlay, Soundtrack), so they act on the *source*, not the device. Next and
+previous appear only while the current source reports that it can skip — the official
+app greys its own buttons out the same way. On the analogue and passthrough inputs
+there is no session to control, so the media player sits idle.
 
 ## Troubleshooting
 

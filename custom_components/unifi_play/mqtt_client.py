@@ -217,6 +217,15 @@ class UnifiPlayMqttClient:
         """Set audio output routing (lineOut, spdif, usb) - Audio Port only."""
         self.publish_action("set_audio_src", {"out": out})
 
+    def set_player(self, action: str) -> None:
+        """Send a transport command: "play", "pause", "prev" or "next".
+
+        Captured from the official app in #4. The speaker forwards these to
+        whatever is streaming to it (Cast, AirPlay, Soundtrack), so they only
+        do anything while a streaming session is active.
+        """
+        self.publish_action("set_player", {"action": action})
+
     def request_extra_info(self) -> None:
         """Request network/firmware details (platform, version, uptime)."""
         self.publish_action("extra_info")

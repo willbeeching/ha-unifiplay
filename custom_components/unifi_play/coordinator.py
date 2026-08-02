@@ -62,6 +62,10 @@ class UnifiPlayDeviceState:
         self.now_playing_length: int = 0
         self.now_playing_current: int = 0
         self.now_playing_cover: str = ""
+        # The streaming source tells us whether it can skip; the official app
+        # greys its buttons out accordingly (#4).
+        self.can_prev: bool = False
+        self.can_next: bool = False
 
     def update_from_info(self, body: dict) -> None:
         """Update state from an MQTT 'info' event."""
@@ -138,6 +142,10 @@ class UnifiPlayDeviceState:
             self.now_playing_current = body["current"]
         if "cover_path" in body:
             self.now_playing_cover = body["cover_path"]
+        if "prev" in body:
+            self.can_prev = bool(body["prev"])
+        if "next" in body:
+            self.can_next = bool(body["next"])
 
     def update_from_online(self, body: dict) -> None:
         """Update online status from an MQTT 'online' event."""

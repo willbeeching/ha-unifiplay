@@ -29,7 +29,13 @@ SUPPORTED_FEATURES = (
     | MediaPlayerEntityFeature.VOLUME_MUTE
     | MediaPlayerEntityFeature.TURN_OFF
     | MediaPlayerEntityFeature.SELECT_SOURCE
+    | MediaPlayerEntityFeature.PLAY
+    | MediaPlayerEntityFeature.PAUSE
 )
+
+# Source value that carries a streaming session; the other inputs are analogue
+# or passthrough and have no transport or metadata of their own.
+SOURCE_STREAMING = "streaming"
 
 
 async def async_setup_entry(
@@ -50,7 +56,6 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
     """A media player entity for a single UniFi Play device."""
 
     _attr_name = None
-    _attr_supported_features = SUPPORTED_FEATURES
 
     def __init__(
         self,
@@ -61,12 +66,32 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
         self._attr_unique_id = f"unifi_play_{self._device_state.mac}"
 
     @property
+    def supported_features(self) -> MediaPlayerEntityFeature:
+        """Offer skip only while the streaming source says it is available.
+
+        The metadata event carries ``prev``/``next`` flags describing what the
+        current source can do — the official app greys its buttons out the
+        same way.
+        """
+        features = SUPPORTED_FEATURES
+        ds = self._device_state
+        if ds.can_prev:
+            features |= MediaPlayerEntityFeature.PREVIOUS_TRACK
+        if ds.can_next:
+            features |= MediaPlayerEntityFeature.NEXT_TRACK
+        return features
+
+    @property
     def state(self) -> MediaPlayerState:
         ds = self._device_state
         if not ds.online:
             return MediaPlayerState.OFF
         if ds.stream_playing:
             return MediaPlayerState.PLAYING
+        # Paused looks exactly like playing minus the flag: the source is still
+        # streaming and the track is still loaded. Anything else is idle.
+        if ds.source == SOURCE_STREAMING and ds.now_playing_song:
+            return MediaPlayerState.PAUSED
         return MediaPlayerState.IDLE
 
     @property
@@ -152,6 +177,26 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
         client = self._mqtt()
         if client and device_value:
             client.set_source(device_value)
+
+    async def async_media_play(self) -> None:
+        client = self._mqtt()
+        if client:
+            client.set_player("play")
+
+    async def async_media_pause(self) -> None:
+        client = self._mqtt()
+        if client:
+            client.set_player("pause")
+
+    async def async_media_next_track(self) -> None:
+        client = self._mqtt()
+        if client:
+            client.set_player("next")
+
+    async def async_media_previous_track(self) -> None:
+        client = self._mqtt()
+        if client:
+            client.set_player("prev")
 
     async def async_set_volume_level(self, volume: float) -> None:
         client = self._mqtt()
