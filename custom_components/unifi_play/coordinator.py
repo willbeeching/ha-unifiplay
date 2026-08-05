@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import UnifiPlayApi, UnifiPlayApiError
 from .discovery import async_resolve_direct
@@ -61,6 +62,10 @@ class UnifiPlayDeviceState:
         self.now_playing_album: str = ""
         self.now_playing_length: int = 0
         self.now_playing_current: int = 0
+        # When the speaker last reported the play position. Home Assistant
+        # extrapolates the playhead from position + (now - this timestamp);
+        # without it the progress bar freezes at the last reported value.
+        self.now_playing_current_at: datetime | None = None
         self.now_playing_cover: str = ""
         # The streaming source tells us whether it can skip; the official app
         # greys its buttons out accordingly (#4).
@@ -140,6 +145,7 @@ class UnifiPlayDeviceState:
             self.now_playing_length = body["length"]
         if "current" in body:
             self.now_playing_current = body["current"]
+            self.now_playing_current_at = dt_util.utcnow()
         if "cover_path" in body:
             self.now_playing_cover = body["cover_path"]
         if "prev" in body:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 import aiohttp
 from homeassistant.components.media_player import (
@@ -129,6 +130,18 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
     def media_position(self) -> int | None:
         pos = self._device_state.now_playing_current
         return pos if pos > 0 else None
+
+    @property
+    def media_position_updated_at(self) -> datetime | None:
+        """When media_position was last refreshed by the speaker.
+
+        Home Assistant draws the playhead as position + (now - this
+        timestamp). Reporting media_position without it leaves the progress
+        bar frozen at whatever value arrived last.
+        """
+        if self._device_state.now_playing_current <= 0:
+            return None
+        return self._device_state.now_playing_current_at
 
     @property
     def media_image_url(self) -> str | None:
