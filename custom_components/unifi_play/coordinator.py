@@ -80,6 +80,36 @@ class UnifiPlayDeviceState:
         # greys its buttons out accordingly (#4).
         self.can_prev: bool = False
         self.can_next: bool = False
+        # Which streaming service is feeding the amp (spotify, airplay, ...) -
+        # reported in every info event while streaming.
+        self.service: str = ""
+        self.space: str = ""
+        self.tz: str = ""
+        self.soundtrack_paired: str = ""
+        self.playlist: str = ""
+        self.uptime: int = 0
+        self.link_quality: int = 0
+        # Feature-level state, populated by request_features() responses.
+        self.alarms: list = []
+        self.quiet_hours: list = []
+        self.ann_files: list = []
+        self.ann_schedule: list = []
+        self.ann_chime: str = ""
+        self.ann_volume: int = 0
+        self.voice_enhancement: bool = False
+        self.streaming_timeout: int = 0
+        # Present in info events only while an alert (alarm test, announcement)
+        # is sounding: the temporary playback level, with self.volume left at
+        # the user's real setting. Absence means nothing is being announced.
+        self.temp_volume: int | None = None
+        # Announcement playback state, also info-event-only and absent when
+        # idle: whether one is sounding, its kind, length and schedule name.
+        self.announcing: bool = False
+        self.announcing_type: str = ""
+        self.announce_length: int = 0
+        self.announce_name: str = ""
+        # Why the device sent this info event, e.g. "set_play". Not always set.
+        self.info_action: str = ""
 
     def update_from_info(self, body: dict) -> None:
         """Update state from an MQTT 'info' event."""
@@ -137,6 +167,23 @@ class UnifiPlayDeviceState:
             self.channels = body["channels"]
         if "persistent_dashboard" in body:
             self.persistent_dashboard = body["persistent_dashboard"]
+        # These appear only while an alert is sounding and vanish afterwards,
+        # so absence has to CLEAR them rather than being ignored.
+        self.temp_volume = body.get("temp_volume") if "temp_volume" in body else None
+        self.announcing = bool(body.get("announcing", False))
+        self.announcing_type = body.get("announcing_type", "")
+        self.announce_length = body.get("announce_length", 0) or 0
+        self.announce_name = body.get("test_schedule_announcement_name", "")
+        if "info_action" in body:
+            self.info_action = body["info_action"]
+        if "service" in body:
+            self.service = body["service"]
+        if "space" in body:
+            self.space = body["space"]
+        if "tz" in body:
+            self.tz = body["tz"]
+        if "soundtrack_paired" in body:
+            self.soundtrack_paired = body["soundtrack_paired"]
 
     def update_from_equalizer(self, body: dict) -> None:
         """Update EQ state from an MQTT 'equalizer' event."""
@@ -177,10 +224,49 @@ class UnifiPlayDeviceState:
             self.can_prev = bool(body["prev"])
         if "next" in body:
             self.can_next = bool(body["next"])
+        if "playlist" in body:
+            self.playlist = body["playlist"]
 
     def update_from_online(self, body: dict) -> None:
         """Update online status from an MQTT 'online' event."""
         self.online = body.get("status", 0) == 1
+
+    def update_from_alarms(self, body: list | dict) -> None:
+        """Update the alarm list from an MQTT 'alarms' event (a bare list)."""
+        if isinstance(body, list):
+            self.alarms = body
+
+    def update_from_quiet_hours(self, body: list | dict) -> None:
+        """Update quiet hours from an MQTT 'quiet_hours' event (a bare list)."""
+        if isinstance(body, list):
+            self.quiet_hours = body
+
+    def update_from_announcement(self, body: dict) -> None:
+        """Update announcement files/schedule from an 'announcement' event."""
+        if "files" in body:
+            self.ann_files = body["files"] or []
+        if "schedule" in body:
+            self.ann_schedule = body["schedule"] or []
+
+    def update_from_announce_chime(self, body: dict) -> None:
+        """Update the announcement chime from an 'announce_chime' event."""
+        if "chime" in body:
+            self.ann_chime = body["chime"]
+
+    def update_from_voice_enhancement(self, body: dict) -> None:
+        """Update voice enhancement from a 'voice_enhancement' event."""
+        if "enable" in body:
+            self.voice_enhancement = bool(body["enable"])
+
+    def update_from_streaming_timeout(self, body: dict) -> None:
+        """Update streaming timeout from a 'streaming_timeout' event."""
+        if "second" in body:
+            self.streaming_timeout = body["second"]
+
+    def update_from_announcement_vol(self, body: dict) -> None:
+        """Update announcement volume from an 'announcement_vol' event."""
+        if "value" in body:
+            self.ann_volume = body["value"]
 
     def update_from_extra_info(self, body: dict) -> None:
         """Update device identity from an MQTT 'extra_info' event.
@@ -194,6 +280,10 @@ class UnifiPlayDeviceState:
         if body.get("version"):
             match = re.search(r"v?(\d+(?:\.\d+)+)", body["version"])
             self.firmware = match.group(1) if match else body["version"]
+        if "uptime" in body:
+            self.uptime = body["uptime"]
+        if "link_quality" in body:
+            self.link_quality = body["link_quality"]
 
 
 class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]]):
@@ -280,12 +370,9 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             client.request_info()
             client.request_extra_info()
             client.request_metadata()
-            # The equalizer and sub_audio events are push-only: without
-            # asking, the EQ preset and the subwoofer entities keep whatever
-            # defaults UnifiPlayDeviceState was constructed with until the
-            # official app happens to touch those settings.
             client.request_equalizer()
             client.request_sub_audio()
+            client.request_features()
         except Exception:
             state = self._device_states.get(device_id)
             platform = state.platform if state else "unknown"
@@ -320,6 +407,20 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             state.update_from_sub_audio(body)
         elif event_name == "extra_info":
             state.update_from_extra_info(body)
+        elif event_name == "alarms":
+            state.update_from_alarms(body)
+        elif event_name == "quiet_hours":
+            state.update_from_quiet_hours(body)
+        elif event_name == "announcement":
+            state.update_from_announcement(body)
+        elif event_name == "announce_chime":
+            state.update_from_announce_chime(body)
+        elif event_name == "voice_enhancement":
+            state.update_from_voice_enhancement(body)
+        elif event_name == "streaming_timeout":
+            state.update_from_streaming_timeout(body)
+        elif event_name == "announcement_vol":
+            state.update_from_announcement_vol(body)
 
         self.async_set_updated_data(self._device_states)
 

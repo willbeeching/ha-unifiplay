@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
-from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+)
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -14,12 +20,22 @@ from .const import DOMAIN
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
 from .entity import UnifiPlayEntity, async_setup_platform_entities
 
+# Friendly names for the streaming service the amp reports. "spotify" is
+# confirmed on the wire; unknown values fall through as-is.
+SERVICE_LABELS = {
+    "spotify": "Spotify Connect",
+    "airplay": "AirPlay",
+    "cast": "Chromecast",
+    "soundtrack": "Soundtrack Your Brand",
+}
+
 
 @dataclass(frozen=True, kw_only=True)
 class UnifiPlaySensorDescription(SensorEntityDescription):
     """Describes a UniFi Play sensor entity."""
 
-    value_fn: Callable[[UnifiPlayDeviceState], str | None]
+    value_fn: Callable[[UnifiPlayDeviceState], Any]
+    attrs_fn: Callable[[UnifiPlayDeviceState], dict[str, Any]] | None = None
 
 
 SENSORS: tuple[UnifiPlaySensorDescription, ...] = (
@@ -29,6 +45,63 @@ SENSORS: tuple[UnifiPlaySensorDescription, ...] = (
         name="Firmware Status",
         icon="mdi:package-up",
         value_fn=lambda s: s.upgrade_status or None,
+    ),
+    UnifiPlaySensorDescription(
+        key="streaming_service",
+        translation_key="streaming_service",
+        name="Streaming Service",
+        icon="mdi:cast-audio",
+        value_fn=lambda s: (
+            SERVICE_LABELS.get(s.service, s.service) if s.service else None
+        ),
+    ),
+    UnifiPlaySensorDescription(
+        key="alarms",
+        translation_key="alarms",
+        name="Alarms",
+        icon="mdi:alarm",
+        value_fn=lambda s: len(s.alarms),
+        attrs_fn=lambda s: {"alarms": s.alarms},
+    ),
+    UnifiPlaySensorDescription(
+        key="quiet_hours",
+        translation_key="quiet_hours",
+        name="Quiet Hours",
+        icon="mdi:weather-night",
+        value_fn=lambda s: len(s.quiet_hours),
+        attrs_fn=lambda s: {"quiet_hours": s.quiet_hours},
+    ),
+    UnifiPlaySensorDescription(
+        key="announcements",
+        translation_key="announcements",
+        name="Announcements",
+        icon="mdi:bullhorn",
+        value_fn=lambda s: len(s.ann_files),
+        attrs_fn=lambda s: {
+            "files": s.ann_files,
+            "schedule": s.ann_schedule,
+            "chime": s.ann_chime,
+        },
+    ),
+    UnifiPlaySensorDescription(
+        key="uptime",
+        translation_key="uptime",
+        name="Uptime",
+        icon="mdi:timer-outline",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda s: s.uptime or None,
+    ),
+    UnifiPlaySensorDescription(
+        key="space",
+        translation_key="space",
+        name="Space",
+        icon="mdi:home-group",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda s: s.space or None,
     ),
 )
 
@@ -63,5 +136,11 @@ class UnifiPlaySensor(UnifiPlayEntity, SensorEntity):
         self._attr_unique_id = f"unifi_play_{self._device_state.mac}_{description.key}"
 
     @property
-    def native_value(self) -> str | None:
+    def native_value(self) -> Any:
         return self.entity_description.value_fn(self._device_state)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if self.entity_description.attrs_fn is None:
+            return None
+        return self.entity_description.attrs_fn(self._device_state)

@@ -242,6 +242,25 @@ class UnifiPlayMqttClient:
         """Request subwoofer state (crossover, level, phase)."""
         self.publish_action("sub_audio")
 
+    def request_features(self) -> None:
+        """Query feature-level state the way the official app does on open.
+
+        Each action answers with a status event of the same name, except
+        ``get_announcement``, which answers as ``announcement``. Like
+        equalizer and sub_audio these are push-only, so without asking they
+        never arrive.
+        """
+        for action in (
+            "alarms",
+            "quiet_hours",
+            "get_announcement",
+            "announce_chime",
+            "voice_enhancement",
+            "streaming_timeout",
+            "announcement_vol",
+        ):
+            self.publish_action(action)
+
     def set_loudness(self, enabled: bool) -> None:
         """Enable or disable Dynamic Boost (loudness)."""
         self.publish_action("set_loudness", {"loudness": enabled})

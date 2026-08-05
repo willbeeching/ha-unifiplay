@@ -39,6 +39,16 @@ SUPPORTED_FEATURES = (
 # or passthrough and have no transport or metadata of their own.
 SOURCE_STREAMING = "streaming"
 
+# Friendly names for the info event's ``service`` field. "spotify" is
+# confirmed on the wire; the rest are best-effort guesses and unknown values
+# fall through as-is rather than being hidden.
+SERVICE_LABELS = {
+    "spotify": "Spotify Connect",
+    "airplay": "AirPlay",
+    "cast": "Chromecast",
+    "soundtrack": "Soundtrack Your Brand",
+}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -115,6 +125,22 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
     @property
     def media_album_name(self) -> str | None:
         return self._device_state.now_playing_album or None
+
+    @property
+    def media_playlist(self) -> str | None:
+        return self._device_state.playlist or None
+
+    @property
+    def app_name(self) -> str | None:
+        """The streaming service feeding the amp (Spotify Connect, AirPlay).
+
+        The device reports this as ``service`` in every info event while a
+        streaming session exists.
+        """
+        service = self._device_state.service
+        if not service:
+            return None
+        return SERVICE_LABELS.get(service, service)
 
     @property
     def media_content_type(self) -> MediaType | None:
