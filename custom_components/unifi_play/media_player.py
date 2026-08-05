@@ -260,6 +260,9 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
             if ds.volume > 0:
                 ds.mute_restore = ds.volume
             ds.muted = True
+            # Until the device reports volume 0 back, ignore any in-flight
+            # info event still carrying the pre-mute volume.
+            ds.mute_confirmed = False
             client.set_mute(True)
         else:
             ds.muted = False

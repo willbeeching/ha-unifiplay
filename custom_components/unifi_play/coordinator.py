@@ -43,6 +43,11 @@ class UnifiPlayDeviceState:
         # set_volume(0) - so the pre-mute level must be remembered here or
         # unmute has nothing to restore to.
         self.mute_restore: int = 0
+        # Set once the device confirms volume actually reached zero. Info
+        # events already in flight when we mute still carry the pre-mute
+        # volume, and treating those as "volume rose above zero" would clear
+        # the mute flag we just set.
+        self.mute_confirmed: bool = False
         self.device_name: str = self.name
         self.upgrade_status: str = ""
         self.balance: int = 0
@@ -83,7 +88,12 @@ class UnifiPlayDeviceState:
             # Mute is software-only (volume 0), so the device never reports a
             # muted flag for it. Volume rising above zero IS unmute, no
             # matter where it came from - app, dashboard slider, or dial.
-            if self.volume > 0:
+            # Only once the mute has been confirmed, though: an info event
+            # sent before our set_volume(0) landed still reports the old
+            # volume, and acting on it would drop the flag immediately.
+            if self.volume == 0:
+                self.mute_confirmed = True
+            elif self.mute_confirmed:
                 self.muted = False
         if "source" in body:
             self.source = body["source"]
