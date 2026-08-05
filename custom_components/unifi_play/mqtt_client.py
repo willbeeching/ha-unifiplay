@@ -234,6 +234,14 @@ class UnifiPlayMqttClient:
         """Request current now-playing metadata."""
         self.publish_action("metadata")
 
+    def request_equalizer(self) -> None:
+        """Request EQ state (active profile and band table)."""
+        self.publish_action("equalizer")
+
+    def request_sub_audio(self) -> None:
+        """Request subwoofer state (crossover, level, phase)."""
+        self.publish_action("sub_audio")
+
     def set_loudness(self, enabled: bool) -> None:
         """Enable or disable Dynamic Boost (loudness)."""
         self.publish_action("set_loudness", {"loudness": enabled})

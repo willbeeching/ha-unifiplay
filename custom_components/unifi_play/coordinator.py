@@ -280,6 +280,12 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             client.request_info()
             client.request_extra_info()
             client.request_metadata()
+            # The equalizer and sub_audio events are push-only: without
+            # asking, the EQ preset and the subwoofer entities keep whatever
+            # defaults UnifiPlayDeviceState was constructed with until the
+            # official app happens to touch those settings.
+            client.request_equalizer()
+            client.request_sub_audio()
         except Exception:
             state = self._device_states.get(device_id)
             platform = state.platform if state else "unknown"
