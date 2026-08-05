@@ -402,6 +402,146 @@ Known sources: `lineIn`, `bluetooth`, `airplay`, `spotify`, `spdif` (HDMI eARC),
 | `set_voice_enhancement` | `{...}` | Configure voice enhancement |
 | `set_streaming_timeout` | `{...}` | Set streaming timeout |
 | `user_fw_upgrade` | `{"version": "..."}` | Trigger firmware update |
+| `announce` | `{...}` | Announcements: play, stop, schedule, file list |
+| `set_alarm` | `{...alarm}` | Create or modify an alarm |
+| `alarm_test` | `{"sound": "...", "on": true}` | Play an alarm tone until stopped |
+| `set_announce_chime` | `{"chime": "Quick Steps"}` | Chime played before an announcement |
+| `set_announcement_vol` | `{...}` | Announcement volume, separate from music |
+
+Bodies for the announcement, alarm, quiet-hours and EQ actions - and the
+non-obvious semantics of several of them - are in
+[Write Actions in Detail](#write-actions-in-detail) below.
+
+### Write Actions in Detail
+
+Reverse-engineered from a 1,782-message capture of the app driving a PowerAmp
+(fw 1.0.38) plus live testing on the same hardware. The bodies below are what
+the app actually sends; the notes are the parts that are not guessable.
+
+#### Announcements
+
+Action: `announce`. The body's own `action` field selects the operation.
+
+| `body.action` | Body | Notes |
+|---------------|------|-------|
+| `schedule-announcement` | `{"filename": "prerecord/X.mp3", "length": 17, "name": "...", "zone_play": false, "enable": true}` | **Plays immediately**, despite the name |
+| — | `{"enable": false}` | Stops the announcement currently playing |
+| `set_schedule` | `{"schedule": [{...}]}` | Replaces the whole schedule list |
+| `add_file` / `del_file` | `{"files": [{"name": "X.mp3", "length": 17}], "file_count": 1}` | Bookkeeping only; see the upload note |
+
+Two traps:
+
+- **`schedule-announcement` is the fire-now primitive.** The name suggests it
+  creates a schedule entry; with `enable: true` it starts playback there and
+  then. Reading the name instead of testing the behaviour costs real time.
+- **`filename` needs the `prerecord/` prefix here**, while the file list in the
+  `announcement` event reports bare names. Pass the bare name and nothing plays.
+
+Music is paused for the duration and resumes by itself.
+
+##### A chime always plays first, and cannot be turned off
+
+Every announcement is preceded by one of five chimes: `Ascending Steps`,
+`Chimes`, `Hopscotch`, `Quick Steps`, `Vibraphone`. There is no off switch:
+
+- `set_announce_chime` carries only `{"chime": "<name>", "timestamp": N}`.
+- The `schedule-announcement` body has no chime field.
+- No off/none/enable flag for the chime appears anywhere in the capture,
+  including the app cycling through all five.
+
+The chime is therefore a fixed lead-in. Measured on a PowerAmp by timing the
+`announcing` flag in `info`, the envelope runs a **constant** amount longer than
+the clip regardless of clip length - about 4.76 s on `Ascending Steps` and
+3.74 s on `Quick Steps` (chime plus pre/post buffer). Anything that needs to
+line an announcement up with an external event has to allow for it.
+
+##### Audio upload is not possible over MQTT
+
+Ruled out, not merely unimplemented. A real 274-second upload from the app
+produced no MQTT traffic carrying audio anywhere in the capture; roughly 30
+candidate HTTP paths on the device were probed; and the firmware index has no
+matching endpoint. `add_file` is bookkeeping the app sends *after* the transfer
+has already happened by another route.
+
+Practical boundary: upload in the app, then automate playback.
+
+#### Alarms
+
+Action: `set_alarm`. Omit `alarm_id` to create, pass an existing one to modify.
+
+```json
+{"action": "add", "alarm_id": "", "name": "Morning", "hour": 7, "minute": 30,
+ "sound": "Lunar Chimes", "volume": 25, "duration": 2, "repeat": [1, 2, 3, 4, 5],
+ "on": true, "timestamp": 1785926923}
+```
+
+`repeat` is weekday numbers with **0 = Sunday**; an empty list means fire once.
+Sounds: `Lunar Chimes`, `Cosmic Bounce`, `Digital Ripple`, `Island Breeze`,
+`Jungle Rhythm`. `duration` is in minutes.
+
+`alarm_test` (`{"sound": "...", "on": true, "volume": 25, "name": "..."}`) plays
+an alarm tone until sent again with `on: false` - the only fire-now sound
+primitive besides an announcement.
+
+Alarms are evaluated on the device, so they still fire with no client connected.
+
+#### Graphic EQ
+
+Action: `set_equalizer`.
+
+```json
+{"profile": "custom", "table": {"32": 0.01, "64": 0.01, "125": 0.01, "250": 0.01,
+ "500": 0.01, "1k": -6.39, "2k": 0.01, "4k": 0.01, "8k": 0.01, "16k": 0.01},
+ "info_sync": false}
+```
+
+Ten fixed bands, plus or minus 12 dB. The app sends `info_sync: false` while a
+slider is in motion and `true` on release.
+
+Four things worth knowing:
+
+- **Preset recall is `active_preset`, not `profile` and not `preset_name`.**
+  `{"profile": "custom", "active_preset": "<name>"}` recalls. Passing the preset
+  name as `profile` is accepted silently and does nothing, which reads exactly
+  like a device-side bug until you find the right field.
+- **`preset_action: "apply"` DELETES the preset.** Discovered by losing one. The
+  management verbs are `mod` (rename, with `preset_rename`) and `del`.
+- **`0.01` is the app's placeholder for an untouched band, not a real baseline.**
+  The device echoes those bands back as `0.0` in `active_table` and rounds gains
+  to 1 dp - send `{1k: 0.89, rest: 0.01}` and it reports `{1k: 0.9, rest: 0.0}`.
+  Sending `0` to flatten a band is correct.
+- **The built-in profiles report a flat `active_table`.** Their shaping happens
+  inside the device, so reading the table back while a built-in profile is
+  active tells you nothing about what you are hearing.
+
+#### Quiet hours
+
+Action: `set_quiet_hour`. Start and end times plus a `repeat` weekday list (same
+0 = Sunday numbering) and an optional wind-down fade. The device silences itself
+for the window and restores the previous volume afterwards.
+
+### Push-only Events
+
+These events are **never sent unless requested**. A client that only subscribes
+and waits will show initialiser defaults forever, which looks like broken
+entities rather than a missing request:
+
+`equalizer`, `sub_audio`, `alarms`, `quiet_hours`, `announcement`,
+`announce_chime`, `voice_enhancement`, `streaming_timeout`, `announcement_vol`.
+
+Send the matching request on connect. Mind the naming: the request is
+**`get_announcement`** but the reply arrives as **`announcement`**, so matching
+reply names to request names does not work uniformly.
+
+### Not Exposed by the Protocol
+
+Confirmed absent rather than undiscovered, from the same capture:
+
+| Wanted | Status |
+|--------|--------|
+| Audio file upload | Not over MQTT (see above) |
+| Disabling the announcement chime | No field exists |
+| Name of the connected AirPlay / Spotify client | The service is reported; the device never publishes the client's name |
 
 ### Device Models
 
