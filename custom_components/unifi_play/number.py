@@ -107,7 +107,24 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
         set_fn="set_sub_level",
         amp_only=True,
     ),
+    UnifiPlayNumberDescription(
+        key="announcement_volume",
+        translation_key="announcement_volume",
+        name="Announcement Volume",
+        icon="mdi:bullhorn-outline",
+        native_min_value=0,
+        native_max_value=100,
+        native_step=1,
+        native_unit_of_measurement="%",
+        mode=NumberMode.SLIDER,
+        value_fn=lambda s: float(s.ann_volume),
+        set_fn="set_announcement_vol",
+    ),
 )
+
+
+# The device's own band labels, in audio order rather than dict order.
+EQ_BANDS = ("32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k")
 
 
 async def async_setup_entry(
@@ -118,13 +135,15 @@ async def async_setup_entry(
     """Set up UniFi Play number entities."""
     coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    def _factory(device_id: str) -> list[UnifiPlayNumber]:
+    def _factory(device_id: str) -> list[NumberEntity]:
         state = coordinator.data[device_id]
-        return [
+        entities: list[NumberEntity] = [
             UnifiPlayNumber(coordinator, device_id, desc)
             for desc in NUMBERS
             if not desc.amp_only or is_amp(state.platform)
         ]
+        entities += [UnifiPlayEqBand(coordinator, device_id, band) for band in EQ_BANDS]
+        return entities
 
     async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
 
@@ -152,3 +171,50 @@ class UnifiPlayNumber(UnifiPlayEntity, NumberEntity):
         client = self._mqtt()
         if client:
             getattr(client, self.entity_description.set_fn)(int(value))
+
+
+class UnifiPlayEqBand(UnifiPlayEntity, NumberEntity):
+    """One band of the 10-band graphic EQ.
+
+    The device only accepts the whole table at once, so a single band edit
+    reads the current table, replaces one entry and sends all ten. Edits land
+    on the ``custom`` profile, which is what the app does too.
+    """
+
+    _attr_native_min_value = -12
+    _attr_native_max_value = 12
+    _attr_native_step = 0.1
+    _attr_native_unit_of_measurement = "dB"
+    _attr_mode = NumberMode.SLIDER
+    _attr_icon = "mdi:tune-vertical"
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(
+        self,
+        coordinator: UnifiPlayCoordinator,
+        device_id: str,
+        band: str,
+    ) -> None:
+        super().__init__(coordinator, device_id)
+        self._band = band
+        self._attr_name = f"EQ {band}Hz" if band.isdigit() else f"EQ {band}"
+        self._attr_unique_id = f"unifi_play_{self._device_state.mac}_eq_{band}"
+
+    @property
+    def available(self) -> bool:
+        return super().available and bool(self._device_state.eq_table)
+
+    @property
+    def native_value(self) -> float | None:
+        raw = self._device_state.eq_table.get(self._band)
+        return float(raw) if raw is not None else None
+
+    async def async_set_native_value(self, value: float) -> None:
+        client = self._mqtt()
+        if not client:
+            return
+        table = {k: float(v) for k, v in self._device_state.eq_table.items()}
+        if not table:
+            return
+        table[self._band] = round(value, 2)
+        client.set_eq_table(table)

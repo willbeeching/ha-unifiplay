@@ -49,6 +49,14 @@ SWITCHES: tuple[UnifiPlaySwitchDescription, ...] = (
         value_fn=lambda s: s.persistent_dashboard,
         set_fn="set_persistent_dashboard",
     ),
+    UnifiPlaySwitchDescription(
+        key="voice_enhancement",
+        translation_key="voice_enhancement",
+        name="Voice Enhancement",
+        icon="mdi:account-voice",
+        value_fn=lambda s: s.voice_enhancement,
+        set_fn="set_voice_enhancement",
+    ),
 )
 
 
@@ -60,8 +68,12 @@ async def async_setup_entry(
     """Set up UniFi Play switch entities."""
     coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    def _factory(device_id: str) -> list[UnifiPlaySwitch]:
-        return [UnifiPlaySwitch(coordinator, device_id, desc) for desc in SWITCHES]
+    def _factory(device_id: str) -> list[SwitchEntity]:
+        entities: list[SwitchEntity] = [
+            UnifiPlaySwitch(coordinator, device_id, desc) for desc in SWITCHES
+        ]
+        entities.append(UnifiPlayAlarmTestSwitch(coordinator, device_id))
+        return entities
 
     async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
 
@@ -94,3 +106,43 @@ class UnifiPlaySwitch(UnifiPlayEntity, SwitchEntity):
         client = self._mqtt()
         if client:
             getattr(client, self.entity_description.set_fn)(False)
+
+
+class UnifiPlayAlarmTestSwitch(UnifiPlayEntity, SwitchEntity):
+    """Plays the device's alarm sound while on - the only play-something-now
+    primitive the device offers, captured from the app's alarm sound preview.
+
+    Optimistic: the device sends no state event for a running test, so this
+    tracks what it last asked for.
+    """
+
+    _attr_name = "Alarm Sound Test"
+    _attr_icon = "mdi:alarm-light"
+    _attr_assumed_state = True
+
+    def __init__(
+        self,
+        coordinator: UnifiPlayCoordinator,
+        device_id: str,
+    ) -> None:
+        super().__init__(coordinator, device_id)
+        self._attr_unique_id = f"unifi_play_{self._device_state.mac}_alarm_test"
+        self._test_on = False
+
+    @property
+    def is_on(self) -> bool:
+        return self._test_on
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        client = self._mqtt()
+        if client:
+            client.alarm_test(True)
+            self._test_on = True
+            self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        client = self._mqtt()
+        if client:
+            client.alarm_test(False)
+            self._test_on = False
+            self.async_write_ha_state()

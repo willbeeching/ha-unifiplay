@@ -30,6 +30,31 @@ CHANNEL_REVERSE = {v: k for k, v in CHANNEL_OPTIONS.items()}
 
 EQ_PRESET_OPTIONS = ["Custom", "Music", "Movie", "Night", "Off"]
 
+# Streaming timeout: how long the device stays in streaming mode with no
+# audio before switching back to the previous input. Seconds on the wire;
+# 0 is what the app calls "Default". Options mirror the official app.
+TIMEOUT_OPTIONS = {
+    0: "Default",
+    10: "10 Seconds",
+    30: "30 Seconds",
+    60: "1 Minute",
+    180: "3 Minutes",
+    300: "5 Minutes",
+    600: "10 Minutes",
+}
+TIMEOUT_REVERSE = {v: k for k, v in TIMEOUT_OPTIONS.items()}
+
+# Announcement chimes. The device never advertises the list, so these are the
+# names observed in the official app; whatever the device currently reports is
+# merged in at runtime so an unlisted chime can never make the entity invalid.
+CHIME_OPTIONS = [
+    "Ascending Steps",
+    "Chimes",
+    "Hopscotch",
+    "Quick Steps",
+    "Vibraphone",
+]
+
 
 @dataclass(frozen=True, kw_only=True)
 class UnifiPlaySelectDescription(SelectEntityDescription):
@@ -72,7 +97,21 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
         name="EQ Preset",
         icon="mdi:equalizer",
         options=EQ_PRESET_OPTIONS,
-        value_fn=lambda s: s.eq_preset.capitalize() if s.eq_preset else None,
+        # Built-in profiles plus whatever custom presets the device holds.
+        options_fn=lambda s: EQ_PRESET_OPTIONS
+        + [
+            p["name"]
+            for p in s.eq_custom_presets
+            if isinstance(p, dict) and p.get("name")
+        ],
+        # A loaded custom preset wins: the profile stays "custom" for those,
+        # so reporting the profile alone would hide which preset is active.
+        value_fn=lambda s: (
+            s.eq_active_preset or (s.eq_preset.capitalize() if s.eq_preset else None)
+        ),
+        # Built-ins are lower-cased profile names; anything else is a saved
+        # preset recalled through a different field entirely, so the entity
+        # dispatches on the value rather than the description.
         set_fn="set_eq_preset",
         convert_fn=lambda v: v.lower(),
     ),
@@ -96,6 +135,29 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
         value_fn=lambda s: CHANNEL_OPTIONS.get(str(s.channels)),
         set_fn="set_channels",
         convert_fn=lambda v: int(CHANNEL_REVERSE[v]),
+    ),
+    UnifiPlaySelectDescription(
+        key="streaming_timeout",
+        translation_key="streaming_timeout",
+        name="Streaming Timeout",
+        icon="mdi:timer-sand",
+        options=list(TIMEOUT_OPTIONS.values()),
+        value_fn=lambda s: TIMEOUT_OPTIONS.get(s.streaming_timeout),
+        set_fn="set_streaming_timeout",
+        convert_fn=lambda v: TIMEOUT_REVERSE[v],
+    ),
+    UnifiPlaySelectDescription(
+        key="announce_chime",
+        translation_key="announce_chime",
+        name="Announcement Chime",
+        icon="mdi:bell-ring",
+        options=CHIME_OPTIONS,
+        options_fn=lambda s: sorted(
+            set(CHIME_OPTIONS) | ({s.ann_chime} if s.ann_chime else set())
+        ),
+        value_fn=lambda s: s.ann_chime or None,
+        set_fn="set_announce_chime",
+        convert_fn=lambda v: v,
     ),
 )
 
@@ -147,6 +209,15 @@ class UnifiPlaySelect(UnifiPlayEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         client = self._mqtt()
-        if client:
-            value = self.entity_description.convert_fn(option)
-            getattr(client, self.entity_description.set_fn)(value)
+        if not client:
+            return
+        # Saved EQ presets are recalled by name through active_preset, which
+        # is a different action shape from selecting a built-in profile.
+        if (
+            self.entity_description.key == "eq_preset"
+            and option not in EQ_PRESET_OPTIONS
+        ):
+            client.apply_eq_preset(option)
+            return
+        value = self.entity_description.convert_fn(option)
+        getattr(client, self.entity_description.set_fn)(value)

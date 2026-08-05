@@ -1,0 +1,215 @@
+play_announcement:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+    filename:
+      required: true
+      example: Corpse_Test.mp3
+      selector:
+        text:
+    length:
+      example: 17
+      selector:
+        number:
+          min: 0
+          max: 3600
+          mode: box
+    zone_play:
+      selector:
+        boolean:
+
+stop_announcement:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+
+delete_announcement_file:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+    filename:
+      required: true
+      example: Corpse_Test.mp3
+      selector:
+        text:
+
+set_alarm:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+    alarm_id:
+      example: leave blank to create a new alarm
+      selector:
+        text:
+    name:
+      example: Morning Alarm
+      selector:
+        text:
+    hour:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 23
+          mode: box
+    minute:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 59
+          mode: box
+    sound:
+      example: Lunar Chimes
+      selector:
+        select:
+          custom_value: true
+          options:
+            - Lunar Chimes
+            - Cosmic Bounce
+            - Digital Ripple
+            - Island Breeze
+            - Jungle Rhythm
+    volume:
+      selector:
+        number:
+          min: 0
+          max: 100
+    duration:
+      selector:
+        number:
+          min: 1
+          max: 60
+          mode: box
+    repeat:
+      example: "[1, 2, 3, 4, 5] for weekdays (0 = Sunday)"
+      selector:
+        object:
+    enabled:
+      selector:
+        boolean:
+
+delete_alarm:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+    alarm_id:
+      required: true
+      selector:
+        text:
+
+set_quiet_hours:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+    quiet_id:
+      example: leave blank to create a new window
+      selector:
+        text:
+    start_hour:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 23
+          mode: box
+    start_minute:
+      selector:
+        number:
+          min: 0
+          max: 59
+          mode: box
+    end_hour:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 23
+          mode: box
+    end_minute:
+      selector:
+        number:
+          min: 0
+          max: 59
+          mode: box
+    repeat:
+      example: "[0, 1, 2, 3, 4, 5, 6] for every day (0 = Sunday)"
+      selector:
+        object:
+    wind_down:
+      selector:
+        number:
+          min: 0
+          max: 60
+          mode: box
+
+delete_quiet_hours:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+    quiet_id:
+      required: true
+      selector:
+        text:
+
+save_eq_preset:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+    name:
+      required: true
+      example: Late Night
+      selector:
+        text:
+
+delete_eq_preset:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+    name:
+      required: true
+      selector:
+        text:
+
+rename_eq_preset:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+    name:
+      required: true
+      selector:
+        text:
+    new_name:
+      required: true
+      selector:
+        text:

@@ -47,8 +47,12 @@ async def async_setup_entry(
     """Set up UniFi Play button entities."""
     coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    def _factory(device_id: str) -> list[UnifiPlayButton]:
-        return [UnifiPlayButton(coordinator, device_id, desc) for desc in BUTTONS]
+    def _factory(device_id: str) -> list[ButtonEntity]:
+        entities: list[ButtonEntity] = [
+            UnifiPlayButton(coordinator, device_id, desc) for desc in BUTTONS
+        ]
+        entities.append(UnifiPlayEqResetButton(coordinator, device_id))
+        return entities
 
     async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
 
@@ -72,3 +76,32 @@ class UnifiPlayButton(UnifiPlayEntity, ButtonEntity):
         client = self._mqtt()
         if client:
             getattr(client, self.entity_description.press_fn)()
+
+
+# The device's own band labels.
+EQ_BANDS = ("32", "64", "125", "250", "500", "1k", "2k", "4k", "8k", "16k")
+
+
+class UnifiPlayEqResetButton(UnifiPlayEntity, ButtonEntity):
+    """Flatten the 10-band graphic EQ.
+
+    The device has no reset action of its own; the app achieves it by sending
+    a table of zeroes, which is what this does.
+    """
+
+    _attr_name = "Reset EQ"
+    _attr_icon = "mdi:tune-vertical-variant"
+
+    def __init__(
+        self,
+        coordinator: UnifiPlayCoordinator,
+        device_id: str,
+    ) -> None:
+        super().__init__(coordinator, device_id)
+        self._attr_unique_id = f"unifi_play_{self._device_state.mac}_eq_reset"
+
+    async def async_press(self) -> None:
+        client = self._mqtt()
+        if client:
+            bands = self._device_state.eq_table or dict.fromkeys(EQ_BANDS, 0.0)
+            client.set_eq_table(dict.fromkeys(bands, 0.0))

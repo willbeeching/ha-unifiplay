@@ -20,6 +20,7 @@ from .const import (
     MODE_DIRECT,
 )
 from .coordinator import UnifiPlayCoordinator
+from .services import async_register_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPlayConfigEntry) ->
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    async_register_services(hass)
     return True
 
 

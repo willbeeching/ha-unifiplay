@@ -63,6 +63,11 @@ class UnifiPlayDeviceState:
         self.channels: int = 0
         self.persistent_dashboard: bool = False
         self.eq_preset: str = "custom"
+        # 10-band graphic EQ, keyed by the device's own band labels
+        # ("32" ... "16k"). Baseline is 0.01, not 0, in the device's own data.
+        self.eq_table: dict[str, float] = {}
+        self.eq_custom_presets: list = []
+        self.eq_active_preset: str = ""
         self.sub_crossover: int = 85
         self.sub_level: int = 3
         self.sub_phase: int = 0
@@ -191,6 +196,13 @@ class UnifiPlayDeviceState:
             self.eq_preset = body["active_profile"]
         if "eq_enable" in body:
             self.eq_enable = body["eq_enable"]
+        if isinstance(body.get("active_table"), dict):
+            self.eq_table = dict(body["active_table"])
+        if isinstance(body.get("custom_presets"), list):
+            self.eq_custom_presets = body["custom_presets"]
+        # Which saved preset is loaded, "" when a built-in profile is active.
+        if "active_preset" in body:
+            self.eq_active_preset = body["active_preset"]
 
     def update_from_sub_audio(self, body: dict) -> None:
         """Update sub audio state from an MQTT 'sub_audio' event."""
