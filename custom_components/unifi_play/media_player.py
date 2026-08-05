@@ -243,9 +243,28 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
             client.set_volume(int(volume * 100))
 
     async def async_mute_volume(self, mute: bool) -> None:
+        """Software mute.
+
+        The speaker has no real mute channel (the client maps mute to
+        set_volume(0)), so the muted flag and the pre-mute volume have to be
+        tracked here. Reading restore_volume at unmute time is too late - the
+        volume is already 0 by then, so it always restored the fallback - and
+        because the device never reports itself muted, is_volume_muted never
+        went true and a toggle could never unmute.
+        """
         client = self._mqtt()
-        if client:
-            client.set_mute(mute, restore_volume=self._device_state.volume or 20)
+        if not client:
+            return
+        ds = self._device_state
+        if mute:
+            if ds.volume > 0:
+                ds.mute_restore = ds.volume
+            ds.muted = True
+            client.set_mute(True)
+        else:
+            ds.muted = False
+            client.set_mute(False, restore_volume=ds.mute_restore or 20)
+        self.async_write_ha_state()
 
     async def async_volume_up(self) -> None:
         ds = self._device_state

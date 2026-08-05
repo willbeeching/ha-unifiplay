@@ -39,6 +39,10 @@ class UnifiPlayDeviceState:
         self.out: str = ""
         self.stream_playing: bool = False
         self.muted: bool = False
+        # The speaker has no real mute channel - the MQTT client maps mute to
+        # set_volume(0) - so the pre-mute level must be remembered here or
+        # unmute has nothing to restore to.
+        self.mute_restore: int = 0
         self.device_name: str = self.name
         self.upgrade_status: str = ""
         self.balance: int = 0
@@ -76,6 +80,11 @@ class UnifiPlayDeviceState:
         """Update state from an MQTT 'info' event."""
         if "volume" in body:
             self.volume = body["volume"]
+            # Mute is software-only (volume 0), so the device never reports a
+            # muted flag for it. Volume rising above zero IS unmute, no
+            # matter where it came from - app, dashboard slider, or dial.
+            if self.volume > 0:
+                self.muted = False
         if "source" in body:
             self.source = body["source"]
         if "out" in body:
@@ -83,7 +92,13 @@ class UnifiPlayDeviceState:
         if "stream_playing" in body:
             self.stream_playing = body["stream_playing"]
         if "muted" in body:
-            self.muted = body["muted"]
+            # The device only knows its hardware mute channel. Our mute is
+            # software (volume 0), which the device reports as muted:false -
+            # honouring that would stomp the flag the moment it was set. So
+            # only a positive assertion is trusted; clearing happens locally
+            # in async_mute_volume(False) or when volume rises above zero.
+            if body["muted"]:
+                self.muted = True
         if "deviceName" in body:
             self.device_name = body["deviceName"]
         if "upgrade_status" in body:
