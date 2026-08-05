@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 
 import aiohttp
@@ -129,6 +130,31 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
     def media_position(self) -> int | None:
         pos = self._device_state.now_playing_current
         return pos if pos > 0 else None
+
+    @property
+    def media_image_hash(self) -> str | None:
+        """Cache key for the cover art.
+
+        Home Assistant's default hashes media_image_url, but the speaker
+        serves artwork from a fixed path that never changes between tracks
+        (it swaps the file contents in place). With a constant URL the hash
+        never changes either, so the frontend and the entity_picture proxy
+        keep serving the first track's cached image forever. Seed the hash
+        with the track identity instead.
+        """
+        if self.media_image_url is None:
+            return None
+        ds = self._device_state
+        seed = "|".join(
+            (
+                ds.now_playing_cover,
+                ds.now_playing_song,
+                ds.now_playing_artist,
+                ds.now_playing_album,
+                str(ds.now_playing_length),
+            )
+        )
+        return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
     @property
     def media_image_url(self) -> str | None:
