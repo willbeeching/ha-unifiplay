@@ -19,7 +19,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, SOURCE_REVERSE, source_label, source_labels
+from .const import (
+    DOMAIN,
+    SERVICE_LABELS,
+    SOURCE_REVERSE,
+    source_label,
+    source_labels,
+)
 from .coordinator import UnifiPlayCoordinator
 from .entity import UnifiPlayEntity, async_setup_platform_entities
 
@@ -38,16 +44,6 @@ SUPPORTED_FEATURES = (
 # Source value that carries a streaming session; the other inputs are analogue
 # or passthrough and have no transport or metadata of their own.
 SOURCE_STREAMING = "streaming"
-
-# Friendly names for the info event's ``service`` field. "spotify" is
-# confirmed on the wire; the rest are best-effort guesses and unknown values
-# fall through as-is rather than being hidden.
-SERVICE_LABELS = {
-    "spotify": "Spotify Connect",
-    "airplay": "AirPlay",
-    "cast": "Chromecast",
-    "soundtrack": "Soundtrack Your Brand",
-}
 
 
 async def async_setup_entry(

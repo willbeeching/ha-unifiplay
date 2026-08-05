@@ -40,5 +40,211 @@
     "abort": {
       "already_configured": "This controller is already configured."
     }
+  },
+  "services": {
+    "play_announcement": {
+      "name": "Play announcement",
+      "description": "Play a prerecorded announcement clip immediately. The clip must already be on the speaker — upload it in the UniFi Play app first. Whatever is streaming is paused for the duration.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play speaker to act on."
+        },
+        "filename": {
+          "name": "File name",
+          "description": "Name of a clip already stored on the speaker, as listed by the Announcements sensor."
+        },
+        "length": {
+          "name": "Length",
+          "description": "Clip duration in seconds. Leave empty to use the duration the speaker reported for this clip."
+        },
+        "zone_play": {
+          "name": "Play across zone",
+          "description": "Play on every speaker in the zone rather than just this one."
+        }
+      }
+    },
+    "stop_announcement": {
+      "name": "Stop announcement",
+      "description": "Stop an announcement that is currently playing and resume whatever was interrupted.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play speaker to act on."
+        }
+      }
+    },
+    "delete_announcement_file": {
+      "name": "Delete announcement clip",
+      "description": "Remove a prerecorded announcement clip from the speaker. Clips can only be added from the UniFi Play app.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play speaker to act on."
+        },
+        "filename": {
+          "name": "File name",
+          "description": "Name of the clip to delete, as listed by the Announcements sensor."
+        }
+      }
+    },
+    "set_alarm": {
+      "name": "Create or update alarm",
+      "description": "Create an alarm on the speaker, or update an existing one by passing its ID. Alarms are scheduled and fired by the speaker itself, so they work whether or not Home Assistant is running.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play speaker to act on."
+        },
+        "alarm_id": {
+          "name": "Alarm ID",
+          "description": "ID of an existing alarm to update. Leave empty to create a new one."
+        },
+        "name": {
+          "name": "Name",
+          "description": "Label shown for the alarm in the UniFi Play app."
+        },
+        "hour": {
+          "name": "Hour",
+          "description": "Hour the alarm fires, 0-23."
+        },
+        "minute": {
+          "name": "Minute",
+          "description": "Minute the alarm fires, 0-59."
+        },
+        "sound": {
+          "name": "Sound",
+          "description": "Alarm sound. One of Lunar Chimes, Cosmic Bounce, Digital Ripple, Island Breeze or Jungle Rhythm."
+        },
+        "volume": {
+          "name": "Volume",
+          "description": "Playback volume for the alarm, 0-100."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long the alarm sounds, in minutes."
+        },
+        "repeat": {
+          "name": "Repeat on",
+          "description": "Weekdays the alarm repeats, 0 = Sunday through 6 = Saturday. Leave empty for a one-shot alarm."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Whether the alarm is active."
+        }
+      }
+    },
+    "delete_alarm": {
+      "name": "Delete alarm",
+      "description": "Delete an alarm from the speaker by its ID.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play speaker to act on."
+        },
+        "alarm_id": {
+          "name": "Alarm ID",
+          "description": "ID of the alarm to delete, as listed by the Alarms sensor."
+        }
+      }
+    },
+    "set_quiet_hours": {
+      "name": "Create or update quiet hours",
+      "description": "Create a quiet-hours window on the speaker, or update an existing one by passing its ID. During the window the speaker limits or silences playback.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play speaker to act on."
+        },
+        "quiet_id": {
+          "name": "Quiet hours ID",
+          "description": "ID of an existing window to update. Leave empty to create a new one."
+        },
+        "start_hour": {
+          "name": "Start hour",
+          "description": "Hour the window begins, 0-23."
+        },
+        "start_minute": {
+          "name": "Start minute",
+          "description": "Minute the window begins, 0-59."
+        },
+        "end_hour": {
+          "name": "End hour",
+          "description": "Hour the window ends, 0-23."
+        },
+        "end_minute": {
+          "name": "End minute",
+          "description": "Minute the window ends, 0-59."
+        },
+        "repeat": {
+          "name": "Repeat on",
+          "description": "Weekdays the window applies, 0 = Sunday through 6 = Saturday. Leave empty to apply once."
+        },
+        "wind_down": {
+          "name": "Wind down",
+          "description": "Minutes spent fading into the window rather than starting abruptly."
+        }
+      }
+    },
+    "delete_quiet_hours": {
+      "name": "Delete quiet hours",
+      "description": "Delete a quiet-hours window from the speaker by its ID.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play speaker to act on."
+        },
+        "quiet_id": {
+          "name": "Quiet hours ID",
+          "description": "ID of the window to delete, as listed by the Quiet Hours sensor."
+        }
+      }
+    },
+    "save_eq_preset": {
+      "name": "Save EQ preset",
+      "description": "Save the speaker's current 10-band equalizer settings as a named preset. The preset then appears in the EQ Preset selector.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play speaker to act on."
+        },
+        "name": {
+          "name": "Preset name",
+          "description": "Name to save the current EQ table under."
+        }
+      }
+    },
+    "delete_eq_preset": {
+      "name": "Delete EQ preset",
+      "description": "Delete a saved custom EQ preset from the speaker.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play speaker to act on."
+        },
+        "name": {
+          "name": "Preset name",
+          "description": "Name of the preset to delete."
+        }
+      }
+    },
+    "rename_eq_preset": {
+      "name": "Rename EQ preset",
+      "description": "Rename a saved custom EQ preset.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play speaker to act on."
+        },
+        "name": {
+          "name": "Preset name",
+          "description": "Current name of the preset."
+        },
+        "new_name": {
+          "name": "New name",
+          "description": "New name for the preset."
+        }
+      }
+    }
   }
 }

@@ -174,7 +174,7 @@ class UnifiPlayDeviceState:
             self.persistent_dashboard = body["persistent_dashboard"]
         # These appear only while an alert is sounding and vanish afterwards,
         # so absence has to CLEAR them rather than being ignored.
-        self.temp_volume = body.get("temp_volume") if "temp_volume" in body else None
+        self.temp_volume = body.get("temp_volume")
         self.announcing = bool(body.get("announcing", False))
         self.announcing_type = body.get("announcing_type", "")
         self.announce_length = body.get("announce_length", 0) or 0

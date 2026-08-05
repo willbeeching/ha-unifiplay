@@ -20,7 +20,7 @@ from .const import (
     MODE_DIRECT,
 )
 from .coordinator import UnifiPlayCoordinator
-from .services import async_register_services
+from .services import async_register_services, async_unregister_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,4 +72,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: UnifiPlayConfigEntry) -
     if unload_ok:
         coordinator: UnifiPlayCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_shutdown()
+        # Services are registered once for the integration, not per entry, so
+        # they only come down with the last one. Left behind they stay visible
+        # in the UI and fail with "No live UniFi Play device".
+        if not hass.data[DOMAIN]:
+            async_unregister_services(hass)
     return unload_ok

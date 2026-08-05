@@ -16,18 +16,9 @@ from homeassistant.const import EntityCategory, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, SERVICE_LABELS
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
 from .entity import UnifiPlayEntity, async_setup_platform_entities
-
-# Friendly names for the streaming service the amp reports. "spotify" is
-# confirmed on the wire; unknown values fall through as-is.
-SERVICE_LABELS = {
-    "spotify": "Spotify Connect",
-    "airplay": "AirPlay",
-    "cast": "Chromecast",
-    "soundtrack": "Soundtrack Your Brand",
-}
 
 
 @dataclass(frozen=True, kw_only=True)

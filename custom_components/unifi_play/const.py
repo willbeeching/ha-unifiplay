@@ -86,3 +86,14 @@ BINME_TYPE_BODY = 0x02
 BINME_FORMAT_JSON = 0x01
 
 DEFAULT_SCAN_INTERVAL = 30
+
+
+# Friendly names for the info event's ``service`` field: which streaming
+# source is feeding the speaker. "spotify" is confirmed on the wire; the rest
+# are best-effort, and unknown values fall through as-is rather than hiding.
+SERVICE_LABELS = {
+    "spotify": "Spotify Connect",
+    "airplay": "AirPlay",
+    "cast": "Chromecast",
+    "soundtrack": "Soundtrack Your Brand",
+}

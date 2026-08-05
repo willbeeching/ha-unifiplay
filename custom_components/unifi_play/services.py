@@ -23,6 +23,20 @@ from .mqtt_client import UnifiPlayMqttClient
 
 ATTR_DEVICE_ID = "device_id"
 
+# Kept in step with services.yaml and the services block in strings.json.
+SERVICE_NAMES = (
+    "play_announcement",
+    "stop_announcement",
+    "delete_announcement_file",
+    "set_alarm",
+    "delete_alarm",
+    "set_quiet_hours",
+    "delete_quiet_hours",
+    "save_eq_preset",
+    "delete_eq_preset",
+    "rename_eq_preset",
+)
+
 WEEKDAYS = vol.All(cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(0, 6))])
 
 _DEVICE = {vol.Required(ATTR_DEVICE_ID): cv.string}
@@ -207,3 +221,9 @@ def async_register_services(hass: HomeAssistant) -> None:
     ]
     for name, handler, schema in handlers:
         hass.services.async_register(DOMAIN, name, handler, schema=schema)
+
+
+def async_unregister_services(hass: HomeAssistant) -> None:
+    """Remove the integration's services when the last entry unloads."""
+    for name in SERVICE_NAMES:
+        hass.services.async_remove(DOMAIN, name)
