@@ -5,22 +5,31 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import logging
+
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    BROADCASTING_MODE_LABELS,
+    BROADCASTING_MODE_REVERSE,
     DOMAIN,
     OUTPUT_LABELS,
     OUTPUT_REVERSE,
-    SOURCE_REVERSE,
+    source_value,
     is_amp,
     source_label,
     source_labels,
 )
-from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
+from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState, UnifiPlayGroupState
 from .entity import UnifiPlayEntity, async_setup_platform_entities
+from .helpers import gs_to_dict
+
+_LOGGER = logging.getLogger(__name__)
 
 PHASE_OPTIONS = {"0": "0\u00b0", "180": "180\u00b0"}
 PHASE_REVERSE = {v: k for k, v in PHASE_OPTIONS.items()}
@@ -62,10 +71,16 @@ class UnifiPlaySelectDescription(SelectEntityDescription):
 
     value_fn: Callable[[UnifiPlayDeviceState], str | None]
     set_fn: str
-    convert_fn: Callable[[str], str | int]
+    # None when convert_state_fn is set instead - the label needs the device
+    # to resolve, so there is no meaningful label-only conversion.
+    convert_fn: Callable[[str], str | int] | None = None
     amp_only: bool = False
     port_only: bool = False
     options_fn: Callable[[UnifiPlayDeviceState], list[str]] | None = None
+    # Set instead of convert_fn when the label -> device value mapping depends
+    # on the hardware: "eARC" is "speakers" on an Audio Port but "spdif" on a
+    # PowerAmp, so the source select cannot use one platform-blind map.
+    convert_state_fn: Callable[[UnifiPlayDeviceState, str], str | int] | None = None
 
 
 SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
@@ -78,7 +93,7 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
         options_fn=lambda s: list(source_labels(s.platform).values()),
         value_fn=lambda s: source_label(s.platform, s.source),
         set_fn="set_source",
-        convert_fn=lambda v: SOURCE_REVERSE[v],
+        convert_state_fn=lambda s, v: source_value(s.platform, v) or v,
     ),
     UnifiPlaySelectDescription(
         key="audio_output",
@@ -181,6 +196,116 @@ async def async_setup_entry(
 
     async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
 
+    # Dynamic zone-level selects — one per zone, created and cleaned up as
+    # zones appear and disappear, mirroring the pattern in binary_sensor.py.
+    # Tracks which zones already have a select. Only the keys matter; the
+    # entities are owned by HA once added.
+    known_zone_selects: set[str] = set()
+
+    @callback
+    def _sync_zone_selects() -> None:
+        active = set(coordinator.groups)
+
+        # Drop tracking entries for zones that are gone. The entities
+        # themselves go when _sync_zones removes the zone device.
+        for gid in list(known_zone_selects):
+            if gid not in active:
+                known_zone_selects.discard(gid)
+
+        new_ids = [gid for gid in active if gid not in known_zone_selects]
+        if not new_ids:
+            return
+        new_entities = [
+            UnifiPlayZoneBroadcastingSelect(coordinator, gid) for gid in new_ids
+        ]
+        for e in new_entities:
+            known_zone_selects.add(e.zone_group_id)
+        async_add_entities(new_entities)
+
+    _sync_zone_selects()
+    entry.async_on_unload(coordinator.async_add_listener(_sync_zone_selects))
+
+
+class UnifiPlayZoneBroadcastingSelect(
+    CoordinatorEntity[UnifiPlayCoordinator], SelectEntity
+):
+    """Stream broadcasting mode for a zone.
+
+    Controls which targets advertise themselves to streaming clients: the zone
+    only, the zone plus each speaker individually, or nothing at all.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Stream Broadcasting"
+    _attr_icon = "mdi:cast-variant"
+    _attr_options = list(BROADCASTING_MODE_LABELS.values())
+
+    def __init__(self, coordinator: UnifiPlayCoordinator, group_id: str) -> None:
+        super().__init__(coordinator)
+        self._group_id = group_id
+        self._attr_unique_id = f"unifi_play_zone_{group_id}_broadcasting_mode"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"zone_{group_id}")},
+        )
+
+    @property
+    def zone_group_id(self) -> str:
+        return self._group_id
+
+    @property
+    def _group(self) -> UnifiPlayGroupState | None:
+        return self.coordinator.groups.get(self._group_id)
+
+    @property
+    def available(self) -> bool:
+        return self._group is not None
+
+    @property
+    def current_option(self) -> str | None:
+        gs = self._group
+        if gs is None:
+            return None
+        # A mode this integration does not know is returned as-is, which HA
+        # renders as "unknown" because SelectEntity.state is @final and drops
+        # any current_option that is not in options. That is the intended
+        # outcome: a firmware that adds a mode should read as unknown rather
+        # than be silently reported as one of the three we do know.
+        return BROADCASTING_MODE_LABELS.get(
+            gs.broadcasting_mode, gs.broadcasting_mode or None
+        )
+
+    async def async_select_option(self, option: str) -> None:
+        gs = self._group
+        if gs is None:
+            return
+        mode = BROADCASTING_MODE_REVERSE.get(option)
+        if mode is None:
+            return
+        client = self.coordinator.get_host_mqtt_client(self._group_id)
+        if not client:
+            _LOGGER.warning("No MQTT client found for zone host %s", gs.host_mac)
+            return
+        # update_group, not set_group: this changes only how the zone
+        # advertises itself, so the host's physical input must be left alone
+        # (set_group would additionally publish set_audio_src).
+        # Every other field is echoed back unchanged: the device replaces the
+        # whole zone on each write, so omitting one would clear it.
+        siblings = [
+            gs_to_dict(g)
+            for g in self.coordinator.get_host_sibling_groups(self._group_id)
+        ]
+        client.update_group(
+            group_id=gs.group_id,
+            name=gs.name,
+            dev_info=gs.dev_info,
+            group_index=gs.group_index,
+            broadcasting_mode=mode,
+            wb_enable=gs.wb_enable,
+            wb_device=gs.wb_device,
+            wb_input=gs.wb_input,
+            sibling_groups=siblings,
+        )
+
 
 class UnifiPlaySelect(UnifiPlayEntity, SelectEntity):
     """A select entity for a UniFi Play device setting."""
@@ -217,5 +342,11 @@ class UnifiPlaySelect(UnifiPlayEntity, SelectEntity):
         ):
             client.apply_eq_preset(option)
             return
-        value = self.entity_description.convert_fn(option)
-        getattr(client, self.entity_description.set_fn)(value)
+        desc = self.entity_description
+        if desc.convert_state_fn is not None:
+            value = desc.convert_state_fn(self._device_state, option)
+        elif desc.convert_fn is not None:
+            value = desc.convert_fn(option)
+        else:
+            value = option
+        getattr(client, desc.set_fn)(value)

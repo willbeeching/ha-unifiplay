@@ -213,3 +213,118 @@ rename_eq_preset:
       required: true
       selector:
         text:
+
+create_zone:
+  fields:
+    name:
+      required: true
+      example: Living Room + Kitchen
+      selector:
+        text:
+    host_device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+    member_device_ids:
+      required: true
+      example: "[device_id_1, device_id_2]"
+      selector:
+        object:
+
+delete_zone:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: unifi_play
+          domain: media_player
+
+add_zone_member:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: unifi_play
+          domain: media_player
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+
+remove_zone_member:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: unifi_play
+          domain: media_player
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: unifi_play
+
+rename_zone:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: unifi_play
+          domain: media_player
+    name:
+      required: true
+      selector:
+        text:
+
+play_zone_announcement:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: unifi_play
+          domain: media_player
+    filename:
+      required: true
+      example: Corpse_Test.mp3
+      selector:
+        text:
+    length:
+      example: 17
+      selector:
+        number:
+          min: 0
+          max: 3600
+          mode: box
+
+stop_zone_announcement:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: unifi_play
+          domain: media_player
+
+set_zone_index:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: unifi_play
+          domain: media_player
+    group_index:
+      required: true
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 99
+          mode: box

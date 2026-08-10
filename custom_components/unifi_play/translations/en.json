@@ -245,6 +245,231 @@
           "description": "New name for the preset."
         }
       }
+    },
+    "create_zone": {
+      "name": "Create zone",
+      "description": "Group two or more UniFi Play devices into a multi-room zone. All devices play in sync. Any device's physical input can optionally be broadcast to the rest of the zone. Note: if the UniFi Play mobile app is open at the same time, its zone writes may overwrite changes made here, as both use the same MQTT channel.",
+      "fields": {
+        "name": {
+          "name": "Zone name",
+          "description": "Display name for the new zone."
+        },
+        "host_device_id": {
+          "name": "Zone host",
+          "description": "The device that leads the zone. All members follow its audio source and volume. Its physical input can optionally be broadcast to all members."
+        },
+        "member_device_ids": {
+          "name": "Member devices",
+          "description": "Additional devices that join the zone. Each device can only be in one zone at a time."
+        }
+      }
+    },
+    "delete_zone": {
+      "name": "Delete zone",
+      "description": "Delete a zone. All devices return to standalone mode.",
+      "fields": {
+        "entity_id": {
+          "name": "Zone",
+          "description": "The zone entity to delete."
+        }
+      }
+    },
+    "add_zone_member": {
+      "name": "Add zone member",
+      "description": "Add a device to an existing zone. A device can only be in one zone at a time — it must be removed from its current zone before it can join another.",
+      "fields": {
+        "entity_id": {
+          "name": "Zone",
+          "description": "The zone entity to modify."
+        },
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play device to add to the zone."
+        }
+      }
+    },
+    "remove_zone_member": {
+      "name": "Remove zone member",
+      "description": "Remove a device from a zone. If it is the device currently hosting the zone, another member takes over automatically. A zone needs at least 2 devices, so removing the second-to-last one is refused — delete the zone instead.",
+      "fields": {
+        "entity_id": {
+          "name": "Zone",
+          "description": "The zone entity to modify."
+        },
+        "device_id": {
+          "name": "Device",
+          "description": "The UniFi Play device to remove from the zone."
+        }
+      }
+    },
+    "rename_zone": {
+      "name": "Rename zone",
+      "description": "Rename a zone.",
+      "fields": {
+        "entity_id": {
+          "name": "Zone",
+          "description": "The zone entity to rename."
+        },
+        "name": {
+          "name": "New name",
+          "description": "The new display name for the zone."
+        }
+      }
+    },
+    "play_zone_announcement": {
+      "name": "Play zone announcement",
+      "description": "Play a prerecorded announcement clip across every device in a zone simultaneously. The clip must already be on the host device — upload it in the UniFi Play app first.",
+      "fields": {
+        "entity_id": {
+          "name": "Zone",
+          "description": "The zone entity to play the announcement on."
+        },
+        "filename": {
+          "name": "File name",
+          "description": "Name of a clip already stored on the host speaker, as listed by the Announcements sensor."
+        },
+        "length": {
+          "name": "Length",
+          "description": "Clip duration in seconds. Leave empty to use the duration the speaker reported for this clip."
+        }
+      }
+    },
+    "stop_zone_announcement": {
+      "name": "Stop zone announcement",
+      "description": "Stop an announcement currently playing across a zone and resume whatever was interrupted on each device.",
+      "fields": {
+        "entity_id": {
+          "name": "Zone",
+          "description": "The zone entity to stop the announcement on."
+        }
+      }
+    },
+    "set_zone_index": {
+      "name": "Set zone display order",
+      "description": "Change the display order of a zone. Lower numbers appear first in the UniFi Play app.",
+      "fields": {
+        "entity_id": {
+          "name": "Zone",
+          "description": "The zone entity to reorder."
+        },
+        "group_index": {
+          "name": "Display order",
+          "description": "Order index (0 = first). Lower values appear earlier in the UniFi Play app zone list."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "UniFi Play Zones",
+        "menu_options": {
+          "create_zone": "Create a new zone",
+          "select_zone": "Modify or delete a zone"
+        }
+      },
+      "create_zone": {
+        "title": "Create Zone",
+        "description": "Select the devices to group into a zone. All devices in a zone play in sync. You can broadcast any device's physical input to the rest of the zone using Set audio source after creating it.\n\nDevices already in another zone are not shown.",
+        "data": {
+          "name": "Zone name",
+          "device_ids": "Devices"
+        },
+        "data_description": {
+          "device_ids": "Select at least 2 devices."
+        }
+      },
+      "select_zone": {
+        "title": "Select Zone",
+        "description": "Choose the zone you want to modify or delete.",
+        "data": {
+          "zone_id": "Zone"
+        }
+      },
+      "zone_action": {
+        "title": "Zone Action",
+        "menu_options": {
+          "rename_zone": "Rename this zone",
+          "add_zone_member": "Add a device to this zone",
+          "remove_zone_member": "Remove a device from this zone",
+          "set_zone_source": "Set audio source (streaming / broadcast wired)",
+          "set_zone_broadcasting": "Set stream broadcasting",
+          "reorder_zone": "Change zone display order",
+          "delete_zone": "Delete this zone",
+          "select_zone": "← Select a different zone",
+          "init": "← Back to main menu"
+        }
+      },
+      "rename_zone": {
+        "title": "Rename Zone",
+        "description": "Enter a new name for **{zone_name}**.",
+        "data": {
+          "name": "New name"
+        }
+      },
+      "add_zone_member": {
+        "title": "Add Zone Member",
+        "description": "Choose a device to add to **{zone_name}**. Devices already in any zone are not shown.",
+        "data": {
+          "device_id": "Device to add"
+        }
+      },
+      "remove_zone_member": {
+        "title": "Remove Zone Member",
+        "description": "Choose a device to remove from **{zone_name}**. A zone needs at least 2 devices.",
+        "data": {
+          "member_mac": "Device to remove"
+        }
+      },
+      "set_zone_source": {
+        "title": "Set Audio Source",
+        "description": "Choose how **{zone_name}** plays audio. Streaming lets each device play its own source independently. Broadcast wired source sends one device's physical input to all other devices in the zone.",
+        "data": {
+          "source_mode": "Audio source"
+        }
+      },
+      "set_zone_wb_device": {
+        "title": "Choose Broadcast Wired Source",
+        "description": "Select which device in **{zone_name}** broadcasts its wired input to the rest of the zone, then pick the input to use.\n\nAn Audio Port can broadcast eARC, Line In, S/PDIF or USB; a PowerAmp can broadcast eARC or Line In.",
+        "data": {
+          "source_device": "Source device",
+          "input_type": "Input type"
+        }
+      },
+      "reorder_zone": {
+        "title": "Change Zone Order",
+        "description": "Set the display order index for **{zone_name}**. Lower numbers appear first in the UniFi Play app.",
+        "data": {
+          "group_index": "Display order (0 = first)"
+        }
+      },
+      "delete_zone": {
+        "title": "Delete Zone",
+        "description": "Delete **{zone_name}**? All devices will return to standalone mode.",
+        "data": {}
+      },
+      "set_zone_broadcasting": {
+        "title": "Stream Broadcasting",
+        "description": "Choose which targets advertise themselves to streaming clients (AirPlay, Spotify Connect, Cast) for **{zone_name}**.\n\n**Zone Only** - only the zone is available for streaming audio.\n**Zone & Devices** - both the zone and individual devices are available.\n**Off** - neither the zone nor individual devices are available.",
+        "data": {
+          "broadcasting_mode": "Stream broadcasting"
+        }
+      }
+    },
+    "abort": {
+      "no_zones": "No zones exist yet. Create one first.",
+      "zone_gone": "That zone no longer exists.",
+      "not_enough_devices": "A zone needs at least 2 devices, and fewer than that are available. Devices already in a zone cannot join another one.",
+      "no_available_devices": "Every device is already in a zone. Remove one from its current zone before adding it here."
+    },
+    "error": {
+      "resolve_failed": "Could not find that device in the coordinator. Make sure it is online.",
+      "no_mqtt": "No MQTT connection to that device. Check that it is reachable.",
+      "already_member": "That device is already a member of this zone.",
+      "not_a_member": "That device is not a member of this zone.",
+      "device_in_other_zone": "One or more selected devices are already in another zone. A device can only be in one zone at a time — remove it from its current zone first.",
+      "input_not_on_device": "That input is not available on the device you selected. An Audio Port has eARC, Line In, S/PDIF and USB; a PowerAmp has eARC and Line In.",
+      "zone_needs_two_devices": "A zone needs at least 2 devices. Delete the zone instead of removing this device."
     }
   }
 }

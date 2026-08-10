@@ -5,17 +5,68 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .api import UnifiPlayApi, UnifiPlayApiError
+from .const import EVENT_ZONE_CREATED, EVENT_ZONE_DELETED, EVENT_ZONE_MEMBER_CHANGED
 from .discovery import async_resolve_direct
 from .mqtt_client import UnifiPlayMqttClient
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _norm_mac(mac: str) -> str:
+    """Normalise a MAC address to uppercase hex without delimiters."""
+    return mac.upper().replace(":", "")
+
+
+@dataclass
+class UnifiPlayGroupState:
+    """State for a single zone/group, populated from the MQTT 'groups' event.
+
+    The 'groups' event is pushed simultaneously to all connected devices
+    whenever zone membership changes in the UniFi Play app.
+    """
+
+    group_id: str
+    name: str
+    dev_count: int
+    group_index: int
+    broadcasting_mode: str
+    wb_enable: bool
+    wb_device: str  # MAC of the source Port when wideband is active
+    wb_input: str   # "lineIn" | "spdif" | "usb" | ""
+    dev_info: list[dict] = field(default_factory=list)
+    host_mac: str = ""  # MAC of the device with host=True in dev_info
+    # Epoch seconds stamped into the zone when it was last written. Devices
+    # echo it back unchanged, which makes it the only way to tell a fresh
+    # copy of a zone from a stale one when several devices report it.
+    timestamp: int = 0
+
+    @classmethod
+    def from_mqtt(cls, group: dict) -> "UnifiPlayGroupState":
+        host_mac = next(
+            (d["mac"] for d in group.get("dev_info", []) if d.get("host")), ""
+        )
+        return cls(
+            group_id=group["group_id"],
+            name=group.get("name", ""),
+            dev_count=group.get("dev_count", 0),
+            group_index=group.get("group_index", 0),
+            broadcasting_mode=group.get("broadcasting_mode", "zone_only"),
+            wb_enable=group.get("wb_enable", False),
+            wb_device=group.get("wb_device", ""),
+            wb_input=group.get("wb_input", ""),
+            dev_info=group.get("dev_info", []),
+            host_mac=host_mac,
+            timestamp=group.get("timestamp", 0) or 0,
+        )
+
 
 # Device state arrives via MQTT push, so this poll exists only to pick up
 # devices adopted after setup, and to retry MQTT for devices that had no IP
@@ -91,6 +142,13 @@ class UnifiPlayDeviceState:
         self.space: str = ""
         self.tz: str = ""
         self.soundtrack_paired: str = ""
+        # Zone membership fields populated from 'info' events.
+        # hosting_group is only present on the zone host device.
+        # sync_devices is only present on zone members (not the host, not standalone).
+        # wb_broadcasting is true on the host while wideband mode is active.
+        self.hosting_group: str = ""
+        self.sync_devices: bool = False
+        self.wb_broadcasting: bool = False
         self.playlist: str = ""
         self.uptime: int = 0
         self.link_quality: int = 0
@@ -189,6 +247,12 @@ class UnifiPlayDeviceState:
             self.tz = body["tz"]
         if "soundtrack_paired" in body:
             self.soundtrack_paired = body["soundtrack_paired"]
+        if "hosting_group" in body:
+            self.hosting_group = body["hosting_group"]
+        if "sync_devices" in body:
+            self.sync_devices = bool(body["sync_devices"])
+        if "wb_broadcasting" in body:
+            self.wb_broadcasting = bool(body["wb_broadcasting"])
 
     def update_from_equalizer(self, body: dict) -> None:
         """Update EQ state from an MQTT 'equalizer' event."""
@@ -317,6 +381,16 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         self.manual_hosts = manual_hosts or []
         self._mqtt_clients: dict[str, UnifiPlayMqttClient] = {}
         self._device_states: dict[str, UnifiPlayDeviceState] = {}
+        # Per-device group cache: device_id → {group_id: GroupState}.
+        # The merged view in `groups` is rebuilt from this on every update so
+        # that a groups event from device B (which lists only B's zones) cannot
+        # wipe zones hosted by device A.
+        self._device_groups: dict[str, dict[str, UnifiPlayGroupState]] = {}
+        # Tracks which devices have completed their initial groups sync so we
+        # can suppress zone_created events that fire for every pre-existing
+        # zone on first MQTT connect (startup / reload).
+        self._device_groups_initialized: set[str] = set()
+        self.groups: dict[str, UnifiPlayGroupState] = {}
 
     async def _async_update_data(self) -> dict[str, UnifiPlayDeviceState]:
         """Fetch the device list and return current state dict.
@@ -385,6 +459,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             client.request_equalizer()
             client.request_sub_audio()
             client.request_features()
+            client.request_groups()
         except Exception:
             state = self._device_states.get(device_id)
             platform = state.platform if state else "unknown"
@@ -400,6 +475,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 _LOGGER.debug("Cleanup of failed MQTT client for %s failed", ip)
             self._mqtt_clients.pop(device_id, None)
 
+    @callback
     def _handle_event(
         self, device_id: str, event_name: str, header: dict, body: dict
     ) -> None:
@@ -433,12 +509,207 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             state.update_from_streaming_timeout(body)
         elif event_name == "announcement_vol":
             state.update_from_announcement_vol(body)
+        elif event_name == "groups":
+            self._update_from_groups(device_id, body)
 
         self.async_set_updated_data(self._device_states)
+
+    def _update_from_groups(self, device_id: str, body: dict) -> None:
+        """Process a 'groups' event from device_id, fire topology-change events, and update state.
+
+        Groups are tracked per source device so that a groups event from device
+        B (which lists only B's zones) does not wipe zones hosted by device A.
+        The public ``self.groups`` is always a merged view across all devices.
+
+        zone_created / zone_deleted / zone_member_changed events are suppressed
+        on the first sync for each device (startup / reload) to avoid flooding
+        the event bus with zones that already existed before HA connected.
+        """
+        incoming = {
+            g["group_id"]: UnifiPlayGroupState.from_mqtt(g)
+            for g in body.get("groups", [])
+            if "group_id" in g
+        }
+        _LOGGER.debug(
+            "groups event from %s: %d zone(s) incoming, %d known for this device",
+            device_id,
+            len(incoming),
+            len(self._device_groups.get(device_id, {})),
+        )
+
+        is_initial = device_id not in self._device_groups_initialized
+        old_device_groups = self._device_groups.get(device_id, {})
+
+        if not is_initial:
+            # Fire events for zones that disappeared from this device.
+            for gid in set(old_device_groups) - set(incoming):
+                gs = old_device_groups[gid]
+                self.hass.bus.async_fire(
+                    EVENT_ZONE_DELETED, {"group_id": gid, "name": gs.name}
+                )
+
+            # Fire events for new zones and member-list changes on this device.
+            for gid, new_gs in incoming.items():
+                if gid not in old_device_groups:
+                    self.hass.bus.async_fire(
+                        EVENT_ZONE_CREATED,
+                        {
+                            "group_id": gid,
+                            "name": new_gs.name,
+                            "host_mac": new_gs.host_mac,
+                            "dev_count": new_gs.dev_count,
+                        },
+                    )
+                else:
+                    old_gs = old_device_groups[gid]
+                    old_macs = {_norm_mac(d["mac"]) for d in old_gs.dev_info if d.get("mac")}
+                    new_macs = {_norm_mac(d["mac"]) for d in new_gs.dev_info if d.get("mac")}
+                    added = new_macs - old_macs
+                    removed = old_macs - new_macs
+                    if added or removed:
+                        self.hass.bus.async_fire(
+                            EVENT_ZONE_MEMBER_CHANGED,
+                            {
+                                "group_id": gid,
+                                "name": new_gs.name,
+                                "added_macs": list(added),
+                                "removed_macs": list(removed),
+                            },
+                        )
+
+        # Update per-device cache and rebuild merged view.
+        self._device_groups[device_id] = dict(incoming)
+        self._device_groups_initialized.add(device_id)
+
+        # Every member of a zone reports that zone in its own groups list, so
+        # the same zone arrives from several devices. Only the host's copy is
+        # authoritative: after an edit the host emits the new state at once,
+        # while members keep serving their previous copy until they resync. A
+        # plain dict merge lets one of those stale copies land last and
+        # silently revert the edit.
+        # A device only claims a zone if its own copy names it as host. That is
+        # still ambiguous while a zone changes hands - the old host keeps
+        # serving a copy that names ITSELF until it resyncs, so two devices
+        # claim the same zone at once. Break that on the wire timestamp, which
+        # the writer stamps and every device echoes back unchanged: the most
+        # recently written copy is the true one. Preferring "whichever device
+        # reported last" instead would resurrect a stale claim every time the
+        # old host happened to speak.
+        merged: dict[str, UnifiPlayGroupState] = {}
+        host_copies: dict[str, UnifiPlayGroupState] = {}
+        for src_device_id, dg in self._device_groups.items():
+            src_state = self._device_states.get(src_device_id)
+            src_mac = _norm_mac(src_state.mac) if src_state else ""
+            for gid, gs in dg.items():
+                merged.setdefault(gid, gs)
+                if not (src_mac and _norm_mac(gs.host_mac) == src_mac):
+                    continue
+                best = host_copies.get(gid)
+                if (
+                    best is None
+                    or gs.timestamp > best.timestamp
+                    # Equal timestamps (or firmware that omits them) fall back
+                    # to the device whose event we are handling right now.
+                    or (gs.timestamp == best.timestamp and src_device_id == device_id)
+                ):
+                    host_copies[gid] = gs
+
+        merged.update(host_copies)
+        self.groups = merged
 
     def get_mqtt_client(self, device_id: str) -> UnifiPlayMqttClient | None:
         """Return the MQTT client for a device."""
         return self._mqtt_clients.get(device_id)
+
+    def get_host_mqtt_client(self, group_id: str) -> UnifiPlayMqttClient | None:
+        """Return the MQTT client for the zone host device."""
+        gs = self.groups.get(group_id)
+        if not gs or not gs.host_mac:
+            return None
+        target = _norm_mac(gs.host_mac)
+        for dev_id, state in self._device_states.items():
+            if _norm_mac(state.mac) == target:
+                return self._mqtt_clients.get(dev_id)
+        return None
+
+    def get_mqtt_client_for_mac(self, mac: str) -> UnifiPlayMqttClient | None:
+        """Return the MQTT client for a device by MAC, only if it is connected.
+
+        A client object outlives its connection, and ``publish_action`` merely
+        warns and drops the message when the socket is down. Callers that move
+        a zone between hosts must know up front whether BOTH ends can be
+        written: the handoff is two publishes, so a silently dropped one
+        leaves the zone stripped from the old host and never given to the new
+        one. Returning None here routes that into the caller's no_mqtt error
+        before anything is written.
+        """
+        target = _norm_mac(mac)
+        for dev_id, state in self._device_states.items():
+            if _norm_mac(state.mac) == target:
+                client = self._mqtt_clients.get(dev_id)
+                return client if client and client.is_connected else None
+        return None
+
+    def get_groups_hosted_by(
+        self, mac: str, exclude_group_id: str | None = None
+    ) -> list["UnifiPlayGroupState"]:
+        """Return every zone hosted by this MAC, optionally excluding one.
+
+        Used when a zone changes hands between hosts: each device's group list
+        is replace-all, so both the old and new host need theirs rebuilt.
+        """
+        host = _norm_mac(mac)
+        return [
+            gs
+            for gs in self.groups.values()
+            if _norm_mac(gs.host_mac) == host and gs.group_id != exclude_group_id
+        ]
+
+    def get_zone_host_state(self, group_id: str) -> "UnifiPlayDeviceState | None":
+        """Return the device state for the zone host."""
+        gs = self.groups.get(group_id)
+        if not gs or not gs.host_mac:
+            return None
+        target = _norm_mac(gs.host_mac)
+        for state in self._device_states.values():
+            if _norm_mac(state.mac) == target:
+                return state
+        return None
+
+    def get_host_sibling_groups(self, group_id: str) -> list["UnifiPlayGroupState"]:
+        """Return every zone on the same host as group_id, excluding group_id itself.
+
+        Used by callers of update_group / set_group to build the sibling_groups
+        list that preserves other zones during a replace-all set_groups write.
+        """
+        target = self.groups.get(group_id)
+        if not target or not target.host_mac:
+            return []
+        host = _norm_mac(target.host_mac)
+        return [
+            gs for gs in self.groups.values()
+            if _norm_mac(gs.host_mac) == host and gs.group_id != group_id
+        ]
+
+    def get_zone_members(
+        self, group_id: str
+    ) -> list[tuple[str, "UnifiPlayDeviceState", "UnifiPlayMqttClient | None"]]:
+        """Return (dev_id, state, client) for every member of a zone.
+
+        Includes the host device. Members that are offline (no MQTT client)
+        are included with client=None so callers can log them if needed.
+        """
+        gs = self.groups.get(group_id)
+        if not gs:
+            return []
+        result = []
+        for entry in gs.dev_info:
+            mac = _norm_mac(entry.get("mac", ""))
+            for dev_id, state in self._device_states.items():
+                if _norm_mac(state.mac) == mac:
+                    result.append((dev_id, state, self._mqtt_clients.get(dev_id)))
+                    break
+        return result
 
     async def async_shutdown(self) -> None:
         """Disconnect all MQTT clients."""

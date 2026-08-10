@@ -1,4 +1,12 @@
-"""Constants for the UniFi Play integration."""
+"""Constants for the UniFi Play integration.
+
+Source values and zone (``groups``) fields are documented with their verified
+wire values in ``docs/api.md`` - see "Audio Source" and "Zones (groups)". Two
+things there are easy to get wrong and are worth reading before touching the
+maps below: ``speakers`` is the HDMI eARC input on an Audio Port (not a
+speaker output), and the same label maps to a different device value per
+model, so the per-platform maps must never be merged into one.
+"""
 
 DOMAIN = "unifi_play"
 
@@ -36,18 +44,30 @@ def is_amp(platform: str) -> bool:
     return platform == PLATFORM_AMP
 
 
-# The device value "spdif" is the HDMI eARC jack on a PowerAmp and the
-# optical S/PDIF input on an Audio Port; label it per platform.
+# The two platforms have different inputs AND different device values for the
+# same jack, so these maps must never be merged: an Audio Port has an optical
+# S/PDIF jack and a separate eARC port, while a PowerAmp has only eARC and
+# Line In.
+#
+# UNVERIFIED: no PowerAmp was available to test, so the eARC value below is
+# inherited from the original map rather than observed. Treat it with
+# suspicion - the Audio Port turned out to report eARC as "speakers", not the
+# "hdmi"/"spdif" that was assumed here, so this may well be "speakers" too.
 SOURCE_LABELS_AMP = {
     "streaming": "Streaming",
-    "spdif": "HDMI eARC",
+    "spdif": "eARC",
     "lineIn": "Line In",
 }
+# Verified against a UPL-PORT on firmware 1.1.10 by setting each input in the
+# Play app and reading back what the device reported. Note "speakers": that is
+# the HDMI eARC input, which the app calls "eARC" - it is NOT a speaker-level
+# output, and labelling it "Speakers" (as this map previously did) hid eARC
+# from the source list entirely.
 SOURCE_LABELS_PORT = {
     "streaming": "Streaming",
-    "spdif": "S/PDIF",
+    "speakers": "eARC",
     "lineIn": "Line In",
-    "speakers": "Speakers",
+    "spdif": "S/PDIF",
     "usb": "USB",
 }
 
@@ -59,13 +79,12 @@ OUTPUT_LABELS = {
     "usb": "USB",
 }
 OUTPUT_REVERSE = {v: k for k, v in OUTPUT_LABELS.items()}
-SOURCE_ALIASES = {"hdmi": "spdif"}
-# Any label from either platform maps back to its device value.
-SOURCE_REVERSE = {
-    label: value
-    for labels in (SOURCE_LABELS_AMP, SOURCE_LABELS_PORT)
-    for value, label in labels.items()
-}
+
+# A PowerAmp has been seen reporting its eARC input as "hdmi"; that
+# canonicalises to the "spdif" value its own label map uses. This is
+# deliberately AMP-only: an Audio Port has both jacks, so applying the alias
+# there would collapse eARC and optical S/PDIF into a single entry.
+SOURCE_ALIASES_AMP = {"hdmi": "spdif"}
 
 
 def source_labels(platform: str) -> dict[str, str]:
@@ -73,12 +92,30 @@ def source_labels(platform: str) -> dict[str, str]:
     return SOURCE_LABELS_AMP if is_amp(platform) else SOURCE_LABELS_PORT
 
 
+def source_aliases(platform: str) -> dict[str, str]:
+    """Device values that canonicalise to another value on this platform."""
+    return SOURCE_ALIASES_AMP if is_amp(platform) else {}
+
+
 def source_label(platform: str, device_source: str | None) -> str | None:
     """Display label for a device-reported source value."""
     if not device_source:
         return None
-    canonical = SOURCE_ALIASES.get(device_source, device_source)
+    canonical = source_aliases(platform).get(device_source, device_source)
     return source_labels(platform).get(canonical, device_source)
+
+
+def source_value(platform: str, label: str) -> str | None:
+    """Display label -> device source value for this platform.
+
+    Resolved per platform rather than through one shared reverse map: "eARC"
+    is "speakers" on an Audio Port but "spdif" on a PowerAmp, so a merged map
+    would silently send the wrong value to one of the two.
+    """
+    for value, lbl in source_labels(platform).items():
+        if lbl == label:
+            return value
+    return None
 
 
 BINME_TYPE_HEADER = 0x01
@@ -97,3 +134,55 @@ SERVICE_LABELS = {
     "cast": "Chromecast",
     "soundtrack": "Soundtrack Your Brand",
 }
+
+# The wb_* fields encode broadcasting one speaker's wired input across a
+# zone (the protocol calls this "wideband"; the Play app calls it a broadcast
+# wired source). The wb_input values are device-side source names, and ""
+# means no wired source is being broadcast — the zone is streaming.
+WB_STREAMING_LABEL = "Streaming"
+
+# "streaming" is the only source that cannot be broadcast: it is not a
+# physical input. Every wired input can be, including "speakers" (eARC).
+NON_BROADCAST_SOURCES = frozenset({"streaming"})
+
+
+def broadcast_input_labels(platform: str) -> dict[str, str]:
+    """Device value -> label for the inputs this platform can broadcast.
+
+    An Audio Port can broadcast eARC, S/PDIF, Line In or USB; a PowerAmp only
+    eARC or Line In. Derived from the platform's source map so the two never
+    drift apart.
+    """
+    return {
+        value: label
+        for value, label in source_labels(platform).items()
+        if value not in NON_BROADCAST_SOURCES
+    }
+
+
+def broadcast_input_label(platform: str, wb_input: str | None) -> str:
+    """Label for a zone's current wb_input, as reported by the device."""
+    if not wb_input:
+        return WB_STREAMING_LABEL
+    canonical = source_aliases(platform).get(wb_input, wb_input)
+    return broadcast_input_labels(platform).get(canonical, wb_input)
+
+BROADCASTING_MODE_ZONE_ONLY = "zone_only"
+
+# "Stream broadcasting" in the Play app: which targets advertise themselves to
+# streaming clients (AirPlay, Spotify Connect, Cast). Values verified against a
+# zone on firmware 1.1.10 by setting each mode in the app and reading it back.
+BROADCASTING_MODE_LABELS = {
+    "zone_only": "Zone Only",
+    "zone_devices": "Zone & Devices",
+    "off": "Off",
+}
+BROADCASTING_MODE_REVERSE: dict[str, str] = {
+    v: k for k, v in BROADCASTING_MODE_LABELS.items()
+}
+
+# Events fired on the HA event bus when zone topology changes.
+# Automations can trigger on these with event: unifi_play_zone_created etc.
+EVENT_ZONE_CREATED = "unifi_play_zone_created"
+EVENT_ZONE_DELETED = "unifi_play_zone_deleted"
+EVENT_ZONE_MEMBER_CHANGED = "unifi_play_zone_member_changed"

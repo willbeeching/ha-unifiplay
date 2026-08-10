@@ -383,7 +383,38 @@ Action: `set_audio_src`
 {"source": "lineIn"}
 ```
 
-Known sources: `lineIn`, `bluetooth`, `airplay`, `spotify`, `spdif` (HDMI eARC), `optical`.
+**The same `source` value means a different physical jack depending on the
+model, so these must never be treated as one shared list.**
+
+Verified on a **UPL-PORT** (fw 1.1.10) by selecting each input in the Play app
+and reading back what the device reported. This is the complete set the Port
+accepts, and it maps 1:1 onto the five inputs the app offers:
+
+| `source` | Play app label | Physical jack |
+|----------|----------------|---------------|
+| `streaming` | Streaming | none - network audio |
+| `speakers` | eARC | HDMI eARC |
+| `lineIn` | Line In | RCA analog in |
+| `spdif` | S/PDIF | optical TOSLINK in |
+| `usb` | USB | USB-C |
+
+> **`speakers` is the HDMI eARC input, not a speaker-level output.** The name
+> is misleading and cost real debugging time: because a Port has *both* an
+> optical jack and an eARC port, and `spdif` is the optical one, eARC needs its
+> own value - and `speakers` is it. Publishing `hdmi`, `earc`, `eArc`, `arc`,
+> `hdmiArc` or `hdmiIn` is silently ignored by the device; none of them are
+> real values. Do not "fix" `speakers` to one of those.
+
+A **UPL-AMP** has only eARC and Line In (no optical, no USB), and its eARC is
+reported as `spdif` rather than `speakers`. That mapping is **unverified** -
+inherited from the original implementation, never tested against real hardware,
+and suspect precisely because the Port turned out to differ from the assumption.
+
+Values seen elsewhere in captures but not confirmed as settable `source`
+values: `bluetooth`, `airplay`, `spotify`, `optical`. The first three look like
+`service` (what is streaming *to* the device) rather than a physical input.
+
+The Port also accepts an output-routing form, `{"out": "lineOut"|"spdif"|"usb"}`.
 
 #### Other Actions
 
@@ -529,6 +560,128 @@ Four things worth knowing:
 Action: `set_quiet_hour`. Start and end times plus a `repeat` weekday list (same
 0 = Sunday numbering) and an optional wind-down fade. The device silences itself
 for the window and restores the previous volume afterwards.
+
+#### Zones (groups)
+
+A zone is a set of devices that play in sync. Read via the `groups` event, written
+with the `set_groups` action. Verified on UPL-PORT fw 1.1.10.
+
+```json
+{"groups": [
+  {
+    "group_id": "9c7ba639-ecf4-4c70-bc91-adf043f3e9ae",
+    "name": "Test zone",
+    "dev_info": [
+      {"type": "UPL-PORT", "mac": "1C0B...CB", "name": "Living Room",
+       "ip": "192.168.2.146", "color": "black", "host": true},
+      {"type": "UPL-PORT", "mac": "1C0B...AA", "name": "Family Room",
+       "ip": "192.168.2.112", "color": "black", "host": false}
+    ],
+    "dev_count": 2,
+    "group_index": 1,
+    "broadcasting_mode": "zone_only",
+    "wb_enable": false,
+    "wb_device": "",
+    "wb_input": "",
+    "timestamp": 1786371652
+  }
+]}
+```
+
+##### `set_groups` is replace-all, per device
+
+Each publish replaces **every** zone on the device it is sent to. To change one
+zone you must resend all the others hosted by that device alongside it, or they
+are deleted. Deleting a zone is the same call with that zone omitted.
+
+This also makes Home Assistant and the mobile app equal peers with no locking:
+whichever writes last wins. A zone created from HA while the Play app is open on
+a zone screen will often vanish immediately, because the app republishes its own
+view. This is a protocol limitation, not a bug to fix.
+
+##### Every member reports the zone, and stale copies will bite you
+
+A zone appears in the `groups` event of *every* device in it, not just the host.
+After an edit the host emits the new state immediately while members keep
+serving their previous copy until they resync. **Merging those copies naively -
+last writer wins - lets a stale member copy silently revert an edit that the
+device actually accepted.** Prefer the copy whose reporting device is the zone's
+own `host`, falling back to a member copy only when the host is not reporting
+(see `_update_from_groups` in `coordinator.py`).
+
+##### The host is an internal role
+
+Exactly one entry in `dev_info` has `"host": true`. The host owns the zone: its
+group list is authoritative and `set_groups` is published to it. The Play app
+does **not** expose this - users just pick devices - so the integration does not
+surface it either.
+
+Removing the hosting device therefore has to hand the role over rather than
+refuse. Because each device's list is replace-all, that is two writes: give the
+zone to the new host (with `host` flipped in `dev_info`), then strip it from the
+old host's list. Both devices must be online, or the zone can end up owned by
+nobody or by two devices at once.
+
+After the handoff the old host's device-level `hosting_group` field stays stale
+until it pushes a fresh `info` event. That field comes from the device's own
+reporting, so it cannot be corrected locally; it self-heals.
+
+##### `broadcasting_mode` - stream broadcasting
+
+Which targets advertise themselves to streaming clients (AirPlay, Spotify
+Connect, Cast). Verified by setting each mode in the app and reading it back:
+
+| Value | Play app | Meaning |
+|-------|----------|---------|
+| `zone_only` | Zone Only | only the zone is available for streaming |
+| `zone_devices` | Zone & Devices | zone *and* each device individually |
+| `off` | Off | neither is available |
+
+##### `wb_*` - broadcasting a wired source
+
+The protocol calls it "wideband"; the app calls it a **broadcast wired source**.
+Any device in the zone can broadcast one of its physical inputs to the rest.
+
+- `wb_enable` - whether a wired source is being broadcast
+- `wb_device` - MAC of the device doing the broadcasting; **not** necessarily
+  the host, which is why a UI must let the user pick which device
+- `wb_input` - a `source` value from the table above, so it is
+  **platform-specific**: eARC is `speakers` on a Port but `spdif` on an Amp.
+  Resolve it against the broadcasting device's own model, never a shared map.
+
+`""` for `wb_input` means no wired source: the zone is streaming.
+
+##### Two publishes, to two different devices
+
+Starting or stopping a broadcast wired source is **not one write**. The zone
+itself is owned by the host, but the input switch belongs to whichever device
+is actually broadcasting:
+
+```
+host device      <- set_groups   (wb_enable / wb_device / wb_input)
+wb_device device <- set_audio_src ({"source": "lineIn"})
+```
+
+These are frequently different devices. There used to be a `set_group()` helper
+that bundled both and sent them to the same client; it was removed because that
+is wrong whenever the source is not the host. Use `update_group()` for the zone
+write and `set_source()` on the source device's own client.
+
+Observed on a three-Port zone (fw 1.1.10) before the fix: with Kitchen hosting
+and Living Room selected as the source, `wb_device` was written correctly as
+Living Room while `set_audio_src` went to **Kitchen** - so Kitchen switched to
+Line In and Living Room stayed on Streaming. The wrong device was switched and
+the chosen one was left alone.
+
+Also note the mirror case when turning broadcasting off: the input has to be
+handed back on the device that *was* broadcasting, again not necessarily the
+host.
+
+Still unverified: a **mixed-model zone** (host and source of different models).
+The author has no PowerAmp. The failure this fix removes was model-independent,
+but a mixed zone additionally has to resolve `wb_input` against the source
+device's platform - the code does this, it has simply never run on real mixed
+hardware. Anyone with both models: please confirm and record the result here.
 
 ### Push-only Events
 

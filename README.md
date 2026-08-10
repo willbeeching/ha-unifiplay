@@ -13,13 +13,17 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 
 - **Media player** — volume, mute, now-playing metadata (song, artist, album), cover
   art, and transport control (play / pause / next / previous) while streaming
+- **Zones** — create and manage multi-room groups; zone volume, mute, and broadcast
+  wired source control via a dedicated zone media player entity; full zone CRUD through
+  the integration's Configure button and callable services
 - **Selects** — audio input, audio output (Ports), EQ preset, sub phase, channels
   (stereo/mono)
 - **Switches** — Dynamic Boost, Dolby Atmos / Equalizer, persistent dashboard
 - **Number controls** — balance, volume limit, screen brightness, LED brightness, sub crossover, sub level
 - **Text** — LED color (hex)
 - **Buttons** — locate (flash LEDs), restart
-- **Sensors** — firmware update status
+- **Sensors** — firmware update status, streaming service, alarms, quiet hours, announcements
+- **Binary sensors** — announcing, admin lock, in-zone status per device, broadcast wired source active per zone
 - **Real-time state** via direct MQTT connection to each device
 
 ## Requirements
@@ -104,7 +108,8 @@ All communication stays local on your network.
 
 Ports don't answer UDP discovery, so always enter their IPs during direct-connection
 setup. Port-specific notes: no subwoofer entities, `spdif` is the optical S/PDIF jack,
-inputs include Speakers and USB, and an **Audio Output** select (Line Out / S/PDIF /
+the device value `speakers` is the HDMI eARC input (shown as **eARC**, matching the
+Play app), inputs also include USB, and an **Audio Output** select (Line Out / S/PDIF /
 USB) exists only on Ports. If you run into device-specific issues, please include the
 device platform from the logs when opening an issue — and attach a
 `scripts/dump_device.py` capture if you can.
@@ -116,6 +121,58 @@ it (Cast, AirPlay, Soundtrack), so they act on the *source*, not the device. Nex
 previous appear only while the current source reports that it can skip — the official
 app greys its own buttons out the same way. On the analogue and passthrough inputs
 there is no session to control, so the media player sits idle.
+
+## Zones
+
+Zones group two or more speakers into a multi-room audio system. One device is the **host** (audio source); the rest are **members** that sync to it. Zones created here appear in the UniFi Play app and vice versa.
+
+### Managing zones
+
+Open **Settings → Devices & Services → UniFi Play → Configure**:
+
+| Action | What it does |
+|--------|--------------|
+| **Create zone** | Pick two or more speakers. A speaker can only be in one zone at a time, so speakers already in a zone are not offered |
+| **Rename / Reorder** | Change the display name or sort index (`group_index`) |
+| **Add / Remove member** | The host cannot be removed — delete the zone instead |
+| **Set audio source** | **Streaming** lets each device play independently. **Broadcast wired source** sends one speaker's physical input (Line In, S/PDIF / eARC, USB) to every other speaker in the zone — any zone member can be the source, not just the host |
+| **Delete zone** | All members return to standalone mode |
+
+> The device protocol uses a replace-all zone write. The integration always preserves sibling zones on the same host, but if you edit zones from the mobile app simultaneously, whichever write lands last wins.
+
+### Entities
+
+Each zone gets a `media_player` entity with volume, mute, and a source selector offering Streaming plus whatever its speakers can broadcast (an Audio Port: eARC / Line In / S/PDIF / USB; a PowerAmp: eARC / Line In). Key state attributes: `group_id`, `group_members` (online member MACs), `wb_enable`, `wb_input`, `host_mac`, `dev_count`.
+
+Two binary sensors are also created per zone/device:
+
+- **`binary_sensor.<device>_in_zone`** — on when the device is participating in any zone (host or member). Carries a `hosting_group_id` attribute when it is the host. Useful as an automation condition before changing a device's source.
+- **`binary_sensor.<zone>_broadcast_wired_source_active`** — on when the zone is broadcasting a speaker's physical input. Attributes: `source_label` (human-readable), `wb_input`, `wb_device_mac`. Installs created before this sensor was renamed keep the original `binary_sensor.<zone>_wideband_active` entity ID; only the display name changed.
+
+### Services
+
+| Service | Key fields |
+|---------|------------|
+| `unifi_play.create_zone` | `name`, `host_device_id`, `member_device_ids` |
+| `unifi_play.delete_zone` | `entity_id` |
+| `unifi_play.add_zone_member` | `entity_id`, `device_id` |
+| `unifi_play.remove_zone_member` | `entity_id`, `device_id` |
+| `unifi_play.rename_zone` | `entity_id`, `name` |
+| `unifi_play.set_zone_index` | `entity_id`, `group_index` |
+| `unifi_play.play_zone_announcement` | `entity_id`, `filename`, `length` — clip must already be on the host device |
+| `unifi_play.stop_zone_announcement` | `entity_id` |
+
+### Automation events
+
+Three events fire on the HA event bus when zone topology changes (use `platform: event` to trigger on them):
+
+| Event | Fires when | Data |
+|-------|-----------|------|
+| `unifi_play_zone_created` | Zone appears — including on HA startup | `group_id`, `name`, `host_mac`, `dev_count` |
+| `unifi_play_zone_deleted` | Zone is removed | `group_id`, `name` |
+| `unifi_play_zone_member_changed` | Member added or removed | `group_id`, `name`, `added_macs`, `removed_macs` |
+
+> `unifi_play_zone_created` fires for all existing zones on first connect. Add a condition if your automation should only run for genuinely new zones.
 
 ## Troubleshooting
 
