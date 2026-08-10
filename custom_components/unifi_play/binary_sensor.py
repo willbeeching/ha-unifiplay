@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, broadcast_input_label
-from .coordinator import UnifiPlayCoordinator
+from .coordinator import UnifiPlayCoordinator, UnifiPlayGroupState
 from .entity import UnifiPlayEntity, async_setup_platform_entities
 from .helpers import mac_normalise
 
@@ -130,6 +130,13 @@ class UnifiPlayInZoneSensor(UnifiPlayEntity, BinarySensorEntity):
     while it's grouped with others."  The ``hosting_group_id`` attribute
     is set when this device is the zone host so automations can look up
     the zone entity if needed.
+
+    Derived from the coordinator's zone state rather than the device's own
+    ``hosting_group`` / ``sync_devices`` fields. Those are only *present* in an
+    info event while they are true, and the coordinator can only assign on
+    presence - so once set they latch and are never cleared. A device that
+    left a zone (or whose zone was deleted) kept reporting itself as in a
+    zone, naming a group_id that no longer existed, indefinitely.
     """
 
     _attr_name = "In Zone"
@@ -143,17 +150,26 @@ class UnifiPlayInZoneSensor(UnifiPlayEntity, BinarySensorEntity):
         super().__init__(coordinator, device_id)
         self._attr_unique_id = f"unifi_play_{self._device_state.mac}_in_zone"
 
+    def _zone(self) -> "UnifiPlayGroupState | None":
+        """The zone this device belongs to, if any."""
+        mac = mac_normalise(self._device_state.mac)
+        for gs in self.coordinator.groups.values():
+            if any(mac_normalise(d.get("mac", "")) == mac for d in gs.dev_info):
+                return gs
+        return None
+
     @property
     def is_on(self) -> bool:
-        ds = self._device_state
-        return bool(ds.sync_devices or ds.hosting_group)
+        return self._zone() is not None
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        ds = self._device_state
-        attrs: dict[str, object] = {}
-        if ds.hosting_group:
-            attrs["hosting_group_id"] = ds.hosting_group
+        gs = self._zone()
+        if gs is None:
+            return {}
+        attrs: dict[str, object] = {"group_id": gs.group_id}
+        if mac_normalise(gs.host_mac) == mac_normalise(self._device_state.mac):
+            attrs["hosting_group_id"] = gs.group_id
         return attrs
 
 
