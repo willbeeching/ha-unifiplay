@@ -98,14 +98,12 @@ class UnifiPlaySwitch(UnifiPlayEntity, SwitchEntity):
         return self.entity_description.value_fn(self._device_state)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        client = self._mqtt()
-        if client:
-            getattr(client, self.entity_description.set_fn)(True)
+        client = self._require_mqtt()
+        getattr(client, self.entity_description.set_fn)(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        client = self._mqtt()
-        if client:
-            getattr(client, self.entity_description.set_fn)(False)
+        client = self._require_mqtt()
+        getattr(client, self.entity_description.set_fn)(False)
 
 
 class UnifiPlayAlarmTestSwitch(UnifiPlayEntity, SwitchEntity):
@@ -134,15 +132,13 @@ class UnifiPlayAlarmTestSwitch(UnifiPlayEntity, SwitchEntity):
         return self._test_on
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        client = self._mqtt()
-        if client:
-            client.alarm_test(True)
-            self._test_on = True
-            self.async_write_ha_state()
+        client = self._require_mqtt()
+        client.alarm_test(True)
+        self._test_on = True
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        client = self._mqtt()
-        if client:
-            client.alarm_test(False)
-            self._test_on = False
-            self.async_write_ha_state()
+        client = self._require_mqtt()
+        client.alarm_test(False)
+        self._test_on = False
+        self.async_write_ha_state()

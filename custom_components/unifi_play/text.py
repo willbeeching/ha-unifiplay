@@ -55,6 +55,5 @@ class UnifiPlayLedColorText(UnifiPlayEntity, TextEntity):
         value = value.lstrip("#").upper()
         if not HEX_RE.match(value):
             return
-        client = self._mqtt()
-        if client:
-            client.set_led_color(value)
+        client = self._require_mqtt()
+        client.set_led_color(value)

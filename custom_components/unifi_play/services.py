@@ -109,10 +109,21 @@ def _resolve(hass: HomeAssistant, device_id: str) -> tuple[UnifiPlayCoordinator,
     macs = {ident[1] for ident in entry.identifiers if ident[0] == DOMAIN}
     if not macs:
         raise ServiceValidationError(f"Device {device_id} is not a UniFi Play device")
+    # The device registry keys on MAC, so two entries for the same hardware -
+    # a console one and a direct one - merge into a single registry device.
+    # Prefer whichever coordinator actually holds a connection, or the service
+    # fails on a dead entry while a working one sits right beside it (#15).
+    fallback: tuple[UnifiPlayCoordinator, str] | None = None
     for coordinator in hass.data.get(DOMAIN, {}).values():
         for dev_id, state in coordinator.data.items():
-            if state.mac in macs:
+            if state.mac not in macs:
+                continue
+            if coordinator.get_mqtt_client(dev_id) is not None:
                 return coordinator, dev_id
+            if fallback is None:
+                fallback = (coordinator, dev_id)
+    if fallback is not None:
+        return fallback
     raise ServiceValidationError(f"No live UniFi Play device for {device_id}")
 
 

@@ -208,9 +208,7 @@ class UnifiPlaySelect(UnifiPlayEntity, SelectEntity):
         return self.entity_description.value_fn(self._device_state)
 
     async def async_select_option(self, option: str) -> None:
-        client = self._mqtt()
-        if not client:
-            return
+        client = self._require_mqtt()
         # Saved EQ presets are recalled by name through active_preset, which
         # is a different action shape from selecting a built-in profile.
         if (

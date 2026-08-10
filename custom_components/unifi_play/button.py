@@ -73,9 +73,8 @@ class UnifiPlayButton(UnifiPlayEntity, ButtonEntity):
         self._attr_unique_id = f"unifi_play_{self._device_state.mac}_{description.key}"
 
     async def async_press(self) -> None:
-        client = self._mqtt()
-        if client:
-            getattr(client, self.entity_description.press_fn)()
+        client = self._require_mqtt()
+        getattr(client, self.entity_description.press_fn)()
 
 
 # The device's own band labels.
@@ -101,7 +100,6 @@ class UnifiPlayEqResetButton(UnifiPlayEntity, ButtonEntity):
         self._attr_unique_id = f"unifi_play_{self._device_state.mac}_eq_reset"
 
     async def async_press(self) -> None:
-        client = self._mqtt()
-        if client:
-            bands = self._device_state.eq_table or dict.fromkeys(EQ_BANDS, 0.0)
-            client.set_eq_table(dict.fromkeys(bands, 0.0))
+        client = self._require_mqtt()
+        bands = self._device_state.eq_table or dict.fromkeys(EQ_BANDS, 0.0)
+        client.set_eq_table(dict.fromkeys(bands, 0.0))

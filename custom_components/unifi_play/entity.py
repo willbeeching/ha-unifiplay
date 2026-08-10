@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -74,8 +75,36 @@ class UnifiPlayEntity(CoordinatorEntity[UnifiPlayCoordinator]):
     def _device_state(self) -> UnifiPlayDeviceState:
         return self.coordinator.data[self._device_id]
 
+    @property
+    def available(self) -> bool:
+        """Available only while the device has a live MQTT connection.
+
+        Every value an entity reports arrives over MQTT, and every command
+        goes back out the same way, so without a connection the state shown
+        is whatever the device state was initialised with. Reporting
+        unavailable makes that visible instead of showing plausible defaults
+        (#15).
+        """
+        return super().available and self._mqtt() is not None
+
     def _mqtt(self) -> UnifiPlayMqttClient | None:
+        """The device's MQTT client, or None when it is not connected."""
         return self.coordinator.get_mqtt_client(self._device_id)
+
+    def _require_mqtt(self) -> UnifiPlayMqttClient:
+        """The device's MQTT client, raising if there is no connection.
+
+        Commands used to no-op silently when disconnected, which reported
+        success to the caller and left the speaker untouched — a fault that
+        surfaced only through the services, which do check (#14).
+        """
+        client = self._mqtt()
+        if client is None:
+            raise HomeAssistantError(
+                f"No MQTT connection to {self._device_state.device_name}. "
+                "The device may be offline, or unreachable on TCP 8883."
+            )
+        return client
 
     @callback
     def _handle_coordinator_update(self) -> None:

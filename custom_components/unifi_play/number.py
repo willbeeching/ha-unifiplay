@@ -168,9 +168,8 @@ class UnifiPlayNumber(UnifiPlayEntity, NumberEntity):
         return self.entity_description.value_fn(self._device_state)
 
     async def async_set_native_value(self, value: float) -> None:
-        client = self._mqtt()
-        if client:
-            getattr(client, self.entity_description.set_fn)(int(value))
+        client = self._require_mqtt()
+        getattr(client, self.entity_description.set_fn)(int(value))
 
 
 class UnifiPlayEqBand(UnifiPlayEntity, NumberEntity):
@@ -210,9 +209,7 @@ class UnifiPlayEqBand(UnifiPlayEntity, NumberEntity):
         return float(raw) if raw is not None else None
 
     async def async_set_native_value(self, value: float) -> None:
-        client = self._mqtt()
-        if not client:
-            return
+        client = self._require_mqtt()
         table = {k: float(v) for k, v in self._device_state.eq_table.items()}
         if not table:
             return

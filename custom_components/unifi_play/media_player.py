@@ -235,34 +235,29 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
 
     async def async_select_source(self, source: str) -> None:
         device_value = SOURCE_REVERSE.get(source)
-        client = self._mqtt()
-        if client and device_value:
+        client = self._require_mqtt()
+        if device_value:
             client.set_source(device_value)
 
     async def async_media_play(self) -> None:
-        client = self._mqtt()
-        if client:
-            client.set_player("play")
+        client = self._require_mqtt()
+        client.set_player("play")
 
     async def async_media_pause(self) -> None:
-        client = self._mqtt()
-        if client:
-            client.set_player("pause")
+        client = self._require_mqtt()
+        client.set_player("pause")
 
     async def async_media_next_track(self) -> None:
-        client = self._mqtt()
-        if client:
-            client.set_player("next")
+        client = self._require_mqtt()
+        client.set_player("next")
 
     async def async_media_previous_track(self) -> None:
-        client = self._mqtt()
-        if client:
-            client.set_player("prev")
+        client = self._require_mqtt()
+        client.set_player("prev")
 
     async def async_set_volume_level(self, volume: float) -> None:
-        client = self._mqtt()
-        if client:
-            client.set_volume(int(volume * 100))
+        client = self._require_mqtt()
+        client.set_volume(int(volume * 100))
 
     async def async_mute_volume(self, mute: bool) -> None:
         """Software mute.
@@ -274,9 +269,7 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
         because the device never reports itself muted, is_volume_muted never
         went true and a toggle could never unmute.
         """
-        client = self._mqtt()
-        if not client:
-            return
+        client = self._require_mqtt()
         ds = self._device_state
         if mute:
             if ds.volume > 0:
@@ -294,18 +287,15 @@ class UnifiPlayMediaPlayer(UnifiPlayEntity, MediaPlayerEntity):
     async def async_volume_up(self) -> None:
         ds = self._device_state
         new_vol = min(ds.volume + 5, ds.vol_limit)
-        client = self._mqtt()
-        if client:
-            client.set_volume(new_vol)
+        client = self._require_mqtt()
+        client.set_volume(new_vol)
 
     async def async_volume_down(self) -> None:
         ds = self._device_state
         new_vol = max(ds.volume - 5, 0)
-        client = self._mqtt()
-        if client:
-            client.set_volume(new_vol)
+        client = self._require_mqtt()
+        client.set_volume(new_vol)
 
     async def async_turn_off(self) -> None:
-        client = self._mqtt()
-        if client:
-            client.publish_action("stop")
+        client = self._require_mqtt()
+        client.publish_action("stop")
