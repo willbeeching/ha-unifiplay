@@ -436,6 +436,16 @@ Two traps:
   then. Reading the name instead of testing the behaviour costs real time.
 - **`filename` needs the `prerecord/` prefix here**, while the file list in the
   `announcement` event reports bare names. Pass the bare name and nothing plays.
+- **The app's label for a clip is not its filename.** Recordings shown as "17"
+  and "18" in the mobile app are `New Recording 17.m4a` and
+  `New Recording 18.m4a` on the device — full prefix, and `.m4a` rather than
+  the `.mp3` the app's UI implies
+  ([#14](https://github.com/willbeeching/ha-unifiplay/issues/14)). Always read
+  the real names from the `announcement` event rather than reconstructing them,
+  because a wrong name fails the same way a missing prefix does.
+
+A bad `filename` is silent in both directions: the device neither plays nor
+complains, so there is nothing to catch. Read the names, don't guess them.
 
 Music is paused for the duration and resumes by itself.
 

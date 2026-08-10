@@ -52,7 +52,7 @@
         },
         "filename": {
           "name": "File name",
-          "description": "Name of a clip already stored on the speaker, as listed by the Announcements sensor."
+          "description": "Name of a clip already stored on the speaker. Read it from the Announcements sensor's files attribute rather than from the UniFi Play app — the app's label is not the filename (a clip shown as \"17\" is really \"New Recording 17.m4a\"), and a wrong name fails silently."
         },
         "length": {
           "name": "Length",
@@ -84,7 +84,7 @@
         },
         "filename": {
           "name": "File name",
-          "description": "Name of the clip to delete, as listed by the Announcements sensor."
+          "description": "Name of a clip already stored on the speaker. Read it from the Announcements sensor's files attribute rather than from the UniFi Play app — the app's label is not the filename (a clip shown as \"17\" is really \"New Recording 17.m4a\"), and a wrong name fails silently."
         }
       }
     },
