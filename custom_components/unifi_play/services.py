@@ -118,7 +118,8 @@ def _resolve(hass: HomeAssistant, device_id: str) -> tuple[UnifiPlayCoordinator,
         for dev_id, state in coordinator.data.items():
             if state.mac not in macs:
                 continue
-            if coordinator.get_mqtt_client(dev_id) is not None:
+            client = coordinator.get_mqtt_client(dev_id)
+            if client is not None and client.is_connected:
                 return coordinator, dev_id
             if fallback is None:
                 fallback = (coordinator, dev_id)
@@ -130,7 +131,10 @@ def _resolve(hass: HomeAssistant, device_id: str) -> tuple[UnifiPlayCoordinator,
 def _client(hass: HomeAssistant, call: ServiceCall) -> UnifiPlayMqttClient:
     coordinator, dev_id = _resolve(hass, call.data[ATTR_DEVICE_ID])
     client = coordinator.get_mqtt_client(dev_id)
-    if client is None:
+    # A registered client is not necessarily a connected one: the coordinator
+    # adds it before dialling out, and publish_action drops commands silently
+    # while disconnected (#14).
+    if client is None or not client.is_connected:
         raise ServiceValidationError("No MQTT connection to that device")
     return client
 

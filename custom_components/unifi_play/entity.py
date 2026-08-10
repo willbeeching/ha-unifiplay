@@ -85,20 +85,33 @@ class UnifiPlayEntity(CoordinatorEntity[UnifiPlayCoordinator]):
         unavailable makes that visible instead of showing plausible defaults
         (#15).
         """
-        return super().available and self._mqtt() is not None
+        return self._connected_mqtt() is not None and super().available
 
     def _mqtt(self) -> UnifiPlayMqttClient | None:
-        """The device's MQTT client, or None when it is not connected."""
+        """The device's MQTT client, whether or not it is connected."""
         return self.coordinator.get_mqtt_client(self._device_id)
 
+    def _connected_mqtt(self) -> UnifiPlayMqttClient | None:
+        """The device's MQTT client, but only while it is actually connected.
+
+        The coordinator registers the client before dialling out and only
+        removes it once the attempt has failed, so a client object exists
+        during every connect attempt and for any period the broker has
+        dropped. Presence alone therefore does not mean commands will land:
+        ``publish_action`` logs and returns when disconnected, which is the
+        same silent no-op this was meant to end (#14).
+        """
+        client = self._mqtt()
+        return client if client is not None and client.is_connected else None
+
     def _require_mqtt(self) -> UnifiPlayMqttClient:
-        """The device's MQTT client, raising if there is no connection.
+        """The device's connected MQTT client, raising if there isn't one.
 
         Commands used to no-op silently when disconnected, which reported
         success to the caller and left the speaker untouched — a fault that
         surfaced only through the services, which do check (#14).
         """
-        client = self._mqtt()
+        client = self._connected_mqtt()
         if client is None:
             raise HomeAssistantError(
                 f"No MQTT connection to {self._device_state.device_name}. "
