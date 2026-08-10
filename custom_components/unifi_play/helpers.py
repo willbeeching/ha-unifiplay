@@ -96,54 +96,67 @@ def move_zone_to_new_host(
     The list is mutated, so pass copies - ``gs.dev_info`` is the live list the
     coordinator holds, and editing it in place would corrupt cached state.
 
-    Each device's group list is replace-all, so moving a zone is two
-    publishes: give it to the new host, then strip it from the old host's
-    list. Both ends must be reachable or the zone could end up owned by
-    nobody, so that is checked before anything is written.
+    Because publish_zones sends the complete zone list to every device, the
+    handover is a single write: the old host receives the same list as
+    everyone else, already naming the new host, so there is no separate
+    "strip it from the old host" step and no window in which two devices
+    believe they host the same zone.
 
-    The two publishes are deliberately adjacent and synchronous
-    (``publish_action`` does not await). Do NOT introduce an await between
-    them: it would open a window in which both devices host the same zone.
-
-    Raises ServiceValidationError when either end is offline.
+    Raises ServiceValidationError when no device can be written to.
     """
     for idx, dev in enumerate(new_dev_info):
         dev["host"] = idx == 0
-    new_host_mac = new_dev_info[0].get("mac", "")
-    old_host_mac = gs.host_mac
-
-    new_client = coordinator.get_mqtt_client_for_mac(new_host_mac)
-    old_client = coordinator.get_mqtt_client_for_mac(old_host_mac)
-    if new_client is None or old_client is None:
-        raise ServiceValidationError(
-            "No MQTT connection to the old or new zone host - both must be "
-            "online to move a zone between hosts"
-        )
 
     # If the removed device was the one broadcasting a wired source, that
     # source leaves with it, so the zone falls back to streaming.
     keep_wb = gs.wb_enable and mac_normalise(
-        gs.wb_device or old_host_mac
+        gs.wb_device or gs.host_mac
     ) != mac_normalise(removed_mac)
 
-    new_host_siblings = [
-        gs_to_dict(g)
-        for g in coordinator.get_groups_hosted_by(
-            new_host_mac, exclude_group_id=gs.group_id
-        )
-    ]
-    new_client.update_group(
-        group_id=gs.group_id,
-        name=gs.name,
-        dev_info=new_dev_info,
-        group_index=gs.group_index,
-        broadcasting_mode=gs.broadcasting_mode,
-        wb_enable=keep_wb,
-        wb_device=gs.wb_device if keep_wb else "",
-        wb_input=gs.wb_input if keep_wb else "",
-        sibling_groups=new_host_siblings,
+    written = coordinator.publish_zones(
+        gs.group_id,
+        group_payload(
+            group_id=gs.group_id,
+            name=gs.name,
+            dev_info=new_dev_info,
+            group_index=gs.group_index,
+            broadcasting_mode=gs.broadcasting_mode,
+            wb_enable=keep_wb,
+            wb_device=gs.wb_device if keep_wb else "",
+            wb_input=gs.wb_input if keep_wb else "",
+        ),
     )
-    old_host_groups = [
-        gs_to_dict(g) for g in coordinator.get_groups_hosted_by(old_host_mac)
-    ]
-    old_client.delete_group(gs.group_id, all_groups=old_host_groups)
+    if not written:
+        raise ServiceValidationError(
+            "No connected UniFi Play device to write the zone to"
+        )
+
+
+def group_payload(
+    *,
+    group_id: str,
+    name: str,
+    dev_info: list[dict[str, Any]],
+    group_index: int = 0,
+    broadcasting_mode: str = "zone_only",
+    wb_enable: bool = False,
+    wb_device: str = "",
+    wb_input: str = "",
+) -> dict[str, Any]:
+    """Build the wire dict for one zone, as set_groups expects it.
+
+    Kept next to gs_to_dict so a zone built here and a zone echoed back by a
+    device serialise identically - the fan-out below mixes both in one list.
+    """
+    return {
+        "group_id": group_id,
+        "name": name,
+        "dev_info": dev_info,
+        "dev_count": len(dev_info),
+        "group_index": group_index,
+        "broadcasting_mode": broadcasting_mode,
+        "wb_enable": wb_enable,
+        "wb_device": wb_device,
+        "wb_input": wb_input,
+        "timestamp": int(time.time()),
+    }

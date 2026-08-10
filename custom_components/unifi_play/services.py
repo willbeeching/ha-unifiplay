@@ -23,7 +23,6 @@ from .const import DOMAIN
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState, UnifiPlayGroupState
 from .helpers import (
     dev_info_entry,
-    gs_to_dict,
     mac_normalise,
     move_zone_to_new_host,
     resolve_device,
@@ -337,22 +336,15 @@ def async_register_services(hass: HomeAssistant) -> None:
                 )
             dev_info.append(dev_info_entry(m_state, host=False))
 
-        siblings = [
-            gs_to_dict(gs)
-            for gs in host_coordinator.groups.values()
-            if mac_normalise(gs.host_mac) == host_mac
-        ]
-        host_client.update_group(
+        host_coordinator.update_zone(
             group_id=str(uuid.uuid4()),
             name=call.data["name"],
             dev_info=dev_info,
-            sibling_groups=siblings,
         )
 
     async def delete_zone(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
-        all_groups = [gs_to_dict(gs) for gs in coordinator.groups.values()]
-        _zone_host_client(coordinator, group_id).delete_group(group_id, all_groups=all_groups)
+        coordinator.delete_zone(group_id)
 
     async def add_zone_member(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
@@ -377,13 +369,11 @@ def async_register_services(hass: HomeAssistant) -> None:
                             "A device can only be in one zone at a time — remove it first."
                         )
 
-        siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(group_id)]
         new_dev_info = list(gs.dev_info) + [dev_info_entry(m_state)]
-        _zone_host_client(coordinator, group_id).update_group(
+        coordinator.update_zone(
             group_id=gs.group_id, name=gs.name, dev_info=new_dev_info,
             group_index=gs.group_index, broadcasting_mode=gs.broadcasting_mode,
             wb_enable=gs.wb_enable, wb_device=gs.wb_device, wb_input=gs.wb_input,
-            sibling_groups=siblings,
         )
 
     async def remove_zone_member(call: ServiceCall) -> None:
@@ -406,12 +396,10 @@ def async_register_services(hass: HomeAssistant) -> None:
             )
 
         if target != mac_normalise(gs.host_mac):
-            siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(group_id)]
-            _zone_host_client(coordinator, group_id).update_group(
+            coordinator.update_zone(
                 group_id=gs.group_id, name=gs.name, dev_info=new_dev_info,
                 group_index=gs.group_index, broadcasting_mode=gs.broadcasting_mode,
                 wb_enable=gs.wb_enable, wb_device=gs.wb_device, wb_input=gs.wb_input,
-                sibling_groups=siblings,
             )
             return
 
@@ -423,23 +411,19 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def rename_zone(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
         gs: UnifiPlayGroupState = coordinator.groups[group_id]
-        siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(group_id)]
-        _zone_host_client(coordinator, group_id).update_group(
+        coordinator.update_zone(
             group_id=gs.group_id, name=call.data["name"], dev_info=gs.dev_info,
             group_index=gs.group_index, broadcasting_mode=gs.broadcasting_mode,
             wb_enable=gs.wb_enable, wb_device=gs.wb_device, wb_input=gs.wb_input,
-            sibling_groups=siblings,
         )
 
     async def set_zone_index(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
         gs: UnifiPlayGroupState = coordinator.groups[group_id]
-        siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(group_id)]
-        _zone_host_client(coordinator, group_id).update_group(
+        coordinator.update_zone(
             group_id=gs.group_id, name=gs.name, dev_info=gs.dev_info,
             group_index=call.data["group_index"], broadcasting_mode=gs.broadcasting_mode,
             wb_enable=gs.wb_enable, wb_device=gs.wb_device, wb_input=gs.wb_input,
-            sibling_groups=siblings,
         )
 
     async def play_zone_announcement(call: ServiceCall) -> None:

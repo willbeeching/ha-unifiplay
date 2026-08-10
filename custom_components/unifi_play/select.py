@@ -290,11 +290,7 @@ class UnifiPlayZoneBroadcastingSelect(
         # (set_group would additionally publish set_audio_src).
         # Every other field is echoed back unchanged: the device replaces the
         # whole zone on each write, so omitting one would clear it.
-        siblings = [
-            gs_to_dict(g)
-            for g in self.coordinator.get_host_sibling_groups(self._group_id)
-        ]
-        client.update_group(
+        self.coordinator.update_zone(
             group_id=gs.group_id,
             name=gs.name,
             dev_info=gs.dev_info,
@@ -303,7 +299,6 @@ class UnifiPlayZoneBroadcastingSelect(
             wb_enable=gs.wb_enable,
             wb_device=gs.wb_device,
             wb_input=gs.wb_input,
-            sibling_groups=siblings,
         )
 
 

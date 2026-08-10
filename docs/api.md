@@ -588,11 +588,37 @@ with the `set_groups` action. Verified on UPL-PORT fw 1.1.10.
 ]}
 ```
 
-##### `set_groups` is replace-all, per device
+##### `set_groups` is replace-all, per device - and does not propagate
 
-Each publish replaces **every** zone on the device it is sent to. To change one
-zone you must resend all the others hosted by that device alongside it, or they
-are deleted. Deleting a zone is the same call with that zone omitted.
+Each publish replaces **every** zone on the device it is sent to, and **only**
+on that device. Nothing is forwarded between speakers.
+
+Every device holds a copy of every zone, including zones it is not a member of.
+So writing to the zone's host alone leaves every other device serving its
+previous copy indefinitely. Measured on five UPL-PORTs (fw 1.1.10) right after
+a host handover written only to the new host:
+
+| device | in zone? | host it reported |
+|--------|----------|------------------|
+| Family Room | yes | Family Room (correct) |
+| Living Room | yes | Living Room (stale) |
+| Kitchen | yes | Living Room (stale) |
+| Ryan's Office | no | Living Room (stale) |
+
+Those stale copies then compete in the merge, which is how an edit the device
+had accepted could appear to revert on the next resync.
+
+**Write the complete zone list to every connected device.** Re-publishing the
+full list to all five converged them immediately, and the three zone members
+held that state across a reload. (A non-member reverted to its own stale copy
+afterwards, which is harmless: a device only claims a zone when the copy names
+*itself* as host, so a non-member's copy can never win the merge.)
+
+`coordinator.publish_zones()` does this; `update_zone()` / `delete_zone()` wrap
+it. Callers no longer assemble a sibling list - the full list is rebuilt from
+coordinator state, so zones on other hosts survive without every caller having
+to remember to resend them. It also means a zone changing hands needs no
+separate "strip it from the old host" write.
 
 This also makes Home Assistant and the mobile app equal peers with no locking:
 whichever writes last wins. A zone created from HA while the Play app is open on
@@ -608,6 +634,10 @@ last writer wins - lets a stale member copy silently revert an edit that the
 device actually accepted.** Prefer the copy whose reporting device is the zone's
 own `host`, falling back to a member copy only when the host is not reporting
 (see `_update_from_groups` in `coordinator.py`).
+
+Fanning writes out to every device (above) removes most of the divergence at
+source; the host preference remains as the tie-break for the window between a
+write and each device's resync, and for devices that were offline during it.
 
 ##### The host is an internal role
 

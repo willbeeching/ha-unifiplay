@@ -39,7 +39,6 @@ from .coordinator import UnifiPlayCoordinator
 from .discovery import async_resolve_direct
 from .helpers import (
     dev_info_entry,
-    gs_to_dict,
     mac_normalise,
     move_zone_to_new_host,
     resolve_device,
@@ -365,23 +364,16 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                                 _LOGGER.warning(
                                     "Skipping speaker %s during zone creation", mid, exc_info=True
                                 )
-                        siblings = [
-                            gs_to_dict(gs)
-                            for gs in host_coordinator.groups.values()
-                            if mac_normalise(gs.host_mac) == host_mac
-                        ]
                         _LOGGER.debug(
-                            "create_zone: host=%s known_groups=%d siblings=%d dev_info=%s",
+                            "create_zone: host=%s known_groups=%d dev_info=%s",
                             host_mac,
                             len(host_coordinator.groups),
-                            len(siblings),
                             [d.get("mac") for d in dev_info],
                         )
-                        host_client.update_group(
+                        host_coordinator.update_zone(
                             group_id=str(uuid.uuid4()),
                             name=user_input["name"],
                             dev_info=dev_info,
-                            sibling_groups=siblings,
                         )
                         return await self.async_step_init()
 
@@ -473,8 +465,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             if client is None:
                 errors["base"] = "no_mqtt"
             else:
-                siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(self._selected_zone_id)]
-                client.update_group(
+                coordinator.update_zone(
                     group_id=gs.group_id,
                     name=user_input["name"],
                     dev_info=gs.dev_info,
@@ -483,7 +474,6 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                     wb_enable=gs.wb_enable,
                     wb_device=gs.wb_device,
                     wb_input=gs.wb_input,
-                    sibling_groups=siblings,
                 )
                 return await self.async_step_zone_action()
 
@@ -528,8 +518,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                             errors["base"] = "no_mqtt"
                         else:
                             new_dev_info = list(gs.dev_info) + [dev_info_entry(m_state)]
-                            siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(self._selected_zone_id)]
-                            client.update_group(
+                            coordinator.update_zone(
                                 group_id=gs.group_id,
                                 name=gs.name,
                                 dev_info=new_dev_info,
@@ -538,7 +527,6 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                                 wb_enable=gs.wb_enable,
                                 wb_device=gs.wb_device,
                                 wb_input=gs.wb_input,
-                                sibling_groups=siblings,
                             )
                             return await self.async_step_zone_action()
 
@@ -597,8 +585,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                 if client is None:
                     errors["base"] = "no_mqtt"
                 else:
-                    siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(self._selected_zone_id)]
-                    client.update_group(
+                    coordinator.update_zone(
                         group_id=gs.group_id,
                         name=gs.name,
                         dev_info=new_dev_info,
@@ -607,7 +594,6 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                         wb_enable=gs.wb_enable,
                         wb_device=gs.wb_device,
                         wb_input=gs.wb_input,
-                        sibling_groups=siblings,
                     )
                     return await self.async_step_zone_action()
             else:
@@ -659,8 +645,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             if client is None:
                 errors["base"] = "no_mqtt"
             else:
-                all_groups = [gs_to_dict(g) for g in coordinator.groups.values()]
-                client.delete_group(self._selected_zone_id, all_groups=all_groups)
+                coordinator.delete_zone(self._selected_zone_id)
                 self._selected_zone_id = None
                 return await self.async_step_init()
 
@@ -688,8 +673,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                 if client is None:
                     errors["base"] = "no_mqtt"
                 else:
-                    siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(self._selected_zone_id)]
-                    client.update_group(
+                    coordinator.update_zone(
                         group_id=gs.group_id,
                         name=gs.name,
                         dev_info=gs.dev_info,
@@ -698,7 +682,6 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                         wb_enable=False,
                         wb_device="",
                         wb_input="",
-                        sibling_groups=siblings,
                     )
                     # Hand the input back on whichever device was broadcasting,
                     # not the host — they are frequently not the same device.
@@ -778,8 +761,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             elif client is None or source_client is None:
                 errors["base"] = "no_mqtt"
             else:
-                siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(self._selected_zone_id)]
-                client.update_group(
+                coordinator.update_zone(
                     group_id=gs.group_id,
                     name=gs.name,
                     dev_info=gs.dev_info,
@@ -788,7 +770,6 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                     wb_enable=True,
                     wb_device=user_input["source_device"],
                     wb_input=wb_input,
-                    sibling_groups=siblings,
                 )
                 source_client.set_source(wb_input)
                 return await self.async_step_zone_action()
@@ -865,8 +846,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             else:
                 # update_group, not set_group: only the advertising mode
                 # changes, so the host's physical input is left untouched.
-                siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(self._selected_zone_id)]
-                client.update_group(
+                coordinator.update_zone(
                     group_id=gs.group_id,
                     name=gs.name,
                     dev_info=gs.dev_info,
@@ -875,7 +855,6 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                     wb_enable=gs.wb_enable,
                     wb_device=gs.wb_device,
                     wb_input=gs.wb_input,
-                    sibling_groups=siblings,
                 )
                 return await self.async_step_zone_action()
 
@@ -916,8 +895,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             if client is None:
                 errors["base"] = "no_mqtt"
             else:
-                siblings = [gs_to_dict(g) for g in coordinator.get_host_sibling_groups(self._selected_zone_id)]
-                client.update_group(
+                coordinator.update_zone(
                     group_id=gs.group_id,
                     name=gs.name,
                     dev_info=gs.dev_info,
@@ -926,7 +904,6 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                     wb_enable=gs.wb_enable,
                     wb_device=gs.wb_device,
                     wb_input=gs.wb_input,
-                    sibling_groups=siblings,
                 )
                 return await self.async_step_zone_action()
 

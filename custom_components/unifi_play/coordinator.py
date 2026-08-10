@@ -617,6 +617,97 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         merged.update(host_copies)
         self.groups = merged
 
+    def update_zone(
+        self,
+        *,
+        group_id: str,
+        name: str,
+        dev_info: list,
+        group_index: int = 0,
+        broadcasting_mode: str = "zone_only",
+        wb_enable: bool = False,
+        wb_device: str = "",
+        wb_input: str = "",
+    ) -> list[str]:
+        """Create or update one zone across every connected device.
+
+        Callers no longer assemble sibling_groups: publish_zones rebuilds the
+        full list from coordinator state, so zones on other hosts survive
+        automatically rather than depending on each caller remembering to
+        resend them.
+        """
+        from .helpers import group_payload
+
+        return self.publish_zones(
+            group_id,
+            group_payload(
+                group_id=group_id,
+                name=name,
+                dev_info=dev_info,
+                group_index=group_index,
+                broadcasting_mode=broadcasting_mode,
+                wb_enable=wb_enable,
+                wb_device=wb_device,
+                wb_input=wb_input,
+            ),
+        )
+
+    def delete_zone(self, group_id: str) -> list[str]:
+        """Remove one zone from every connected device."""
+        return self.publish_zones(group_id, None)
+
+    def publish_zones(
+        self, group_id: str, updated: dict | None
+    ) -> list[str]:
+        """Write a zone change out to EVERY connected device.
+
+        ``updated`` is the new wire dict for the zone, or None to delete it.
+        Returns the MACs actually written to.
+
+        set_groups is replace-all *per device*, and every device carries a copy
+        of every zone - including zones it is not a member of. Publishing only
+        to the zone's host therefore leaves every other device serving its
+        previous copy indefinitely: nothing propagates between devices. Those
+        stale copies then compete in _update_from_groups, which is how an
+        accepted edit could appear to revert on the next resync.
+
+        Verified on five UPL-PORTs (fw 1.1.10): after a host handover written
+        only to the new host, three of four devices still named the old host;
+        re-publishing the full list to all five converged them, and the three
+        zone members held that state across a reload.
+
+        Sending the complete list to everyone also means a zone changing hands
+        needs no separate "strip it from the old host" write - the old host is
+        simply given the same list as everyone else.
+        """
+        from .helpers import gs_to_dict
+
+        groups: list[dict] = []
+        replaced = False
+        for gid, gs in self.groups.items():
+            if gid != group_id:
+                groups.append(gs_to_dict(gs))
+                continue
+            replaced = True
+            if updated is not None:
+                groups.append(updated)
+        if updated is not None and not replaced:
+            groups.append(updated)  # a zone being created
+
+        written: list[str] = []
+        for dev_id, client in self._mqtt_clients.items():
+            if client is None or not client.is_connected:
+                continue
+            client.publish_action("set_groups", {"groups": groups})
+            state = self._device_states.get(dev_id)
+            if state is not None:
+                written.append(state.mac)
+        _LOGGER.debug(
+            "publish_zones: %d zone(s) -> %d device(s) %s",
+            len(groups), len(written), written,
+        )
+        return written
+
     def get_mqtt_client(self, device_id: str) -> UnifiPlayMqttClient | None:
         """Return the MQTT client for a device."""
         return self._mqtt_clients.get(device_id)

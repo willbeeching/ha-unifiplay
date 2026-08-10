@@ -40,7 +40,7 @@ from .coordinator import (
     UnifiPlayGroupState,
 )
 from .entity import UnifiPlayEntity, async_setup_platform_entities
-from .helpers import gs_to_dict, mac_normalise
+from .helpers import mac_normalise
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -616,11 +616,10 @@ class UnifiPlayZonePlayer(CoordinatorEntity[UnifiPlayCoordinator], MediaPlayerEn
         # Preserve whichever zone member was set as the broadcast source;
         # fall back to host only if no device has been chosen yet.
         source_mac = gs.wb_device or gs.host_mac
-        siblings = [gs_to_dict(g) for g in self.coordinator.get_host_sibling_groups(self._group_id)]
         # update_group, not set_group: the zone write belongs on the host, but
         # the input switch belongs on the device that will actually broadcast.
         # set_group would send both to the host, switching the wrong device.
-        client.update_group(
+        self.coordinator.update_zone(
             group_id=gs.group_id,
             name=gs.name,
             dev_info=gs.dev_info,
@@ -629,7 +628,6 @@ class UnifiPlayZonePlayer(CoordinatorEntity[UnifiPlayCoordinator], MediaPlayerEn
             wb_enable=wb_enable,
             wb_device=source_mac if wb_enable else "",
             wb_input=device_val,
-            sibling_groups=siblings,
         )
         source_client = self.coordinator.get_mqtt_client_for_mac(source_mac)
         if source_client is not None:
