@@ -49,13 +49,20 @@ def is_amp(platform: str) -> bool:
 # S/PDIF jack and a separate eARC port, while a PowerAmp has only eARC and
 # Line In.
 #
-# UNVERIFIED: no PowerAmp was available to test, so the eARC value below is
-# inherited from the original map rather than observed. Treat it with
-# suspicion - the Audio Port turned out to report eARC as "speakers", not the
-# "hdmi"/"spdif" that was assumed here, so this may well be "speakers" too.
+# UNVERIFIED: no PowerAmp was available when the Port values below were
+# established, so the eARC value here is inherited from the original map
+# rather than observed. Treat it with suspicion - the Audio Port turned out
+# to report eARC as "speakers", not the "hdmi"/"spdif" assumed here, so this
+# may well be "speakers" too. See #16.
+#
+# The label is deliberately left as "HDMI eARC" rather than renamed to match
+# the Port's "eARC": renaming it would break existing automations that select
+# the source by name, and there is no evidence yet that the PowerAmp's own app
+# screen calls it anything different. Rename it once someone with the hardware
+# confirms both the value and the app's wording.
 SOURCE_LABELS_AMP = {
     "streaming": "Streaming",
-    "spdif": "eARC",
+    "spdif": "HDMI eARC",
     "lineIn": "Line In",
 }
 # Verified against a UPL-PORT on firmware 1.1.10 by setting each input in the
@@ -166,6 +173,7 @@ def broadcast_input_label(platform: str, wb_input: str | None) -> str:
         return WB_STREAMING_LABEL
     canonical = source_aliases(platform).get(wb_input, wb_input)
     return broadcast_input_labels(platform).get(canonical, wb_input)
+
 
 BROADCASTING_MODE_ZONE_ONLY = "zone_only"
 

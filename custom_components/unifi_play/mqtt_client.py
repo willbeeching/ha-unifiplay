@@ -202,55 +202,6 @@ class UnifiPlayMqttClient:
         """Request current zone/group state from the device."""
         self.publish_action("groups")
 
-    def update_group(
-        self,
-        group_id: str,
-        name: str,
-        dev_info: list,
-        group_index: int = 0,
-        broadcasting_mode: str = "zone_only",
-        wb_enable: bool = False,
-        wb_device: str = "",
-        wb_input: str = "",
-        sibling_groups: list[dict] | None = None,
-    ) -> None:
-        """Update zone topology, membership, or wideband config on the host.
-
-        set_groups is replace-all on the host device.  Pass sibling_groups
-        (the serialised dicts of every OTHER zone on this host) so they are
-        preserved alongside the updated zone.  Without this, a host with
-        multiple zones would lose all but the one being changed.
-
-        Does NOT change any device's physical audio source. When a zone starts
-        or stops broadcasting a wired source, follow this with set_source() on
-        the client of the device named in wb_device — which is frequently NOT
-        the host, and is the whole reason set_group() was removed.
-        """
-        updated: dict = {
-            "group_id": group_id,
-            "name": name,
-            "dev_info": dev_info,
-            "dev_count": len(dev_info),
-            "group_index": group_index,
-            "broadcasting_mode": broadcasting_mode,
-            "wb_enable": wb_enable,
-            "wb_device": wb_device,
-            "wb_input": wb_input,
-            "timestamp": int(time.time()),
-        }
-        groups = list(sibling_groups or []) + [updated]
-        self.publish_action("set_groups", {"groups": groups})
-
-    def delete_group(self, group_id: str, all_groups: list[dict]) -> None:
-        """Delete a zone group by group_id while preserving any other zones.
-
-        set_groups is replace-all on the host device, so we resend every group
-        we want to KEEP.  Callers pass all current groups including the target;
-        this method filters out the target before publishing.
-        """
-        keep = [g for g in all_groups if g.get("group_id") != group_id]
-        self.publish_action("set_groups", {"groups": keep})
-
     def set_volume(self, volume: int) -> None:
         """Set volume (0-100)."""
         self.publish_action("set_volume", {"volume": volume, "info_sync": True})

@@ -1,4 +1,5 @@
 """Shared device-resolution helpers used by both services and config flow."""
+
 from __future__ import annotations
 
 import time
@@ -28,7 +29,9 @@ def resolve_device(
     entry = dr.async_get(hass).async_get(device_id)
     if entry is None:
         raise ServiceValidationError(f"Unknown device: {device_id}")
-    norm_macs = {mac_normalise(ident[1]) for ident in entry.identifiers if ident[0] == DOMAIN}
+    norm_macs = {
+        mac_normalise(ident[1]) for ident in entry.identifiers if ident[0] == DOMAIN
+    }
     if not norm_macs:
         raise ServiceValidationError(f"Device {device_id} is not a UniFi Play device")
     # The device registry keys on MAC, so two entries for the same hardware -

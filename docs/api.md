@@ -410,6 +410,12 @@ reported as `spdif` rather than `speakers`. That mapping is **unverified** -
 inherited from the original implementation, never tested against real hardware,
 and suspect precisely because the Port turned out to differ from the assumption.
 
+For the same reason the PowerAmp's label is still `HDMI eARC` while the Port's
+is `eARC`. Aligning them would rename a source that existing automations select
+by name, and nobody has yet confirmed either the PowerAmp's device value or what
+its own app screen calls that input. The per-platform maps exist precisely so
+the two can disagree until there is evidence.
+
 Values seen elsewhere in captures but not confirmed as settable `source`
 values: `bluetooth`, `airplay`, `spotify`, `optical`. The first three look like
 `service` (what is streaming *to* the device) rather than a physical input.

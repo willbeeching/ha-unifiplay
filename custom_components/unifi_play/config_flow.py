@@ -7,10 +7,16 @@ import uuid
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.core import callback
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import device_registry as dr, selector
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import selector
 
 from .api import (
     UnifiPlayApi,
@@ -242,12 +248,18 @@ class UnifiPlayOptionsFlow(OptionsFlow):
         """
         device_reg = dr.async_get(self.hass)
         options: list[selector.SelectOptionDict] = []
-        for dev_entry in dr.async_entries_for_config_entry(device_reg, self.config_entry.entry_id):
+        for dev_entry in dr.async_entries_for_config_entry(
+            device_reg, self.config_entry.entry_id
+        ):
             mac: str | None = None
             for domain, ident_val in dev_entry.identifiers:
                 # The zone_ check runs on the raw value: normalising first
                 # would upper-case the prefix and stop matching.
-                if domain == DOMAIN and isinstance(ident_val, str) and not ident_val.startswith("zone_"):
+                if (
+                    domain == DOMAIN
+                    and isinstance(ident_val, str)
+                    and not ident_val.startswith("zone_")
+                ):
                     mac = mac_normalise(ident_val)
                     break
             if mac is None:
@@ -320,7 +332,9 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                 member_ids = device_ids[1:]
 
                 try:
-                    host_coordinator, host_internal_id = resolve_device(self.hass, host_dev_id)
+                    host_coordinator, host_internal_id = resolve_device(
+                        self.hass, host_dev_id
+                    )
                     host_state = (host_coordinator.data or {}).get(host_internal_id)
                     if host_state is None:
                         raise Exception("Speaker data not yet available")
@@ -340,13 +354,16 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                                     m_coord, m_internal = resolve_device(self.hass, mid)
                                     m_state = (m_coord.data or {}).get(m_internal)
                                     if m_state:
-                                        occupied = self._occupied_zone(mac_normalise(m_state.mac))
+                                        occupied = self._occupied_zone(
+                                            mac_normalise(m_state.mac)
+                                        )
                                         if occupied is not None:
                                             break
                                 except Exception:
                                     _LOGGER.debug(
                                         "Could not resolve %s while checking zone "
-                                        "occupancy; treating as unoccupied", mid,
+                                        "occupancy; treating as unoccupied",
+                                        mid,
                                         exc_info=True,
                                     )
                         if occupied is not None:
@@ -362,7 +379,9 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                                     dev_info.append(dev_info_entry(m_state))
                             except Exception:
                                 _LOGGER.warning(
-                                    "Skipping speaker %s during zone creation", mid, exc_info=True
+                                    "Skipping speaker %s during zone creation",
+                                    mid,
+                                    exc_info=True,
                                 )
                         _LOGGER.debug(
                             "create_zone: host=%s known_groups=%d dev_info=%s",
@@ -394,7 +413,9 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                 {
                     vol.Required("name"): selector.TextSelector(),
                     vol.Required("device_ids"): selector.SelectSelector(
-                        selector.SelectSelectorConfig(options=device_options, multiple=True)
+                        selector.SelectSelectorConfig(
+                            options=device_options, multiple=True
+                        )
                     ),
                 }
             ),
@@ -502,7 +523,9 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                 m_coord, m_internal = resolve_device(self.hass, user_input["device_id"])
                 m_state = m_coord.data[m_internal]
             except Exception:
-                _LOGGER.exception("Failed to resolve member device %s", user_input.get("device_id"))
+                _LOGGER.exception(
+                    "Failed to resolve member device %s", user_input.get("device_id")
+                )
                 errors["base"] = "resolve_failed"
             else:
                 m_mac = mac_normalise(m_state.mac)
@@ -513,7 +536,9 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                     if occupied is not None and occupied != gs.group_id:
                         errors["base"] = "device_in_other_zone"
                     else:
-                        client = coordinator.get_host_mqtt_client(self._selected_zone_id)
+                        client = coordinator.get_host_mqtt_client(
+                            self._selected_zone_id
+                        )
                         if client is None:
                             errors["base"] = "no_mqtt"
                         else:
@@ -572,7 +597,8 @@ class UnifiPlayOptionsFlow(OptionsFlow):
         if user_input is not None:
             target_mac = user_input["member_mac"]
             new_dev_info = [
-                dict(d) for d in gs.dev_info
+                dict(d)
+                for d in gs.dev_info
                 if mac_normalise(d.get("mac", "")) != mac_normalise(target_mac)
             ]
             removing_host = mac_normalise(target_mac) == mac_normalise(gs.host_mac)
@@ -608,7 +634,9 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                 else:
                     _LOGGER.debug(
                         "remove_zone_member: zone %s host %s -> %s",
-                        gs.group_id, old_host_mac, new_dev_info[0].get("mac", ""),
+                        gs.group_id,
+                        old_host_mac,
+                        new_dev_info[0].get("mac", ""),
                     )
                     return await self.async_step_zone_action()
 
@@ -698,7 +726,8 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                             _LOGGER.debug(
                                 "Zone %s: previous broadcast device %s is offline; "
                                 "leaving its input alone",
-                                gs.name, gs.wb_device or gs.host_mac,
+                                gs.name,
+                                gs.wb_device or gs.host_mac,
                             )
                     return await self.async_step_zone_action()
             else:
@@ -710,11 +739,17 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             description_placeholders={"zone_name": gs.name},
             data_schema=vol.Schema(
                 {
-                    vol.Required("source_mode", default=current_mode): selector.SelectSelector(
+                    vol.Required(
+                        "source_mode", default=current_mode
+                    ): selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=[
-                                selector.SelectOptionDict(value="streaming", label="Streaming"),
-                                selector.SelectOptionDict(value="broadcast", label="Broadcast wired source"),
+                                selector.SelectOptionDict(
+                                    value="streaming", label="Streaming"
+                                ),
+                                selector.SelectOptionDict(
+                                    value="broadcast", label="Broadcast wired source"
+                                ),
                             ]
                         )
                     )
@@ -746,11 +781,10 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             platform = member_platforms.get(source_mac, "")
             wb_input = source_value(platform, user_input["input_type"])
             client = coordinator.get_host_mqtt_client(self._selected_zone_id)
-            # The zone write goes to the host (it owns the zone), but the
-            # input switch has to go to the DEVICE THAT WILL BROADCAST, which
-            # is often not the host. set_group would send both to the host,
-            # switching the wrong device's input and leaving the chosen one
-            # untouched — so the two are published separately here.
+            # The input switch has to go to the DEVICE THAT WILL BROADCAST,
+            # which is often not the host. Sending it to the host instead
+            # would switch the wrong device's input and leave the chosen one
+            # untouched — so the two writes are published separately here.
             source_client = coordinator.get_mqtt_client_for_mac(
                 user_input["source_device"]
             )
@@ -814,10 +848,14 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             description_placeholders={"zone_name": gs.name},
             data_schema=vol.Schema(
                 {
-                    vol.Required("source_device", default=default_device): selector.SelectSelector(
+                    vol.Required(
+                        "source_device", default=default_device
+                    ): selector.SelectSelector(
                         selector.SelectSelectorConfig(options=device_options)
                     ),
-                    vol.Required("input_type", default=current_input_label): selector.SelectSelector(
+                    vol.Required(
+                        "input_type", default=current_input_label
+                    ): selector.SelectSelector(
                         selector.SelectSelectorConfig(options=input_options)
                     ),
                 }
@@ -844,8 +882,8 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             elif mode is None:
                 errors["broadcasting_mode"] = "resolve_failed"
             else:
-                # update_group, not set_group: only the advertising mode
-                # changes, so the host's physical input is left untouched.
+                # Only the zone's advertising mode changes here, so no
+                # device's physical input is touched.
                 coordinator.update_zone(
                     group_id=gs.group_id,
                     name=gs.name,
@@ -866,7 +904,9 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             description_placeholders={"zone_name": gs.name},
             data_schema=vol.Schema(
                 {
-                    vol.Required("broadcasting_mode", default=current): selector.SelectSelector(
+                    vol.Required(
+                        "broadcasting_mode", default=current
+                    ): selector.SelectSelector(
                         selector.SelectSelectorConfig(
                             options=[
                                 selector.SelectOptionDict(value=label, label=label)
@@ -912,8 +952,12 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             description_placeholders={"zone_name": gs.name},
             data_schema=vol.Schema(
                 {
-                    vol.Required("group_index", default=gs.group_index): selector.NumberSelector(
-                        selector.NumberSelectorConfig(min=0, max=99, mode=selector.NumberSelectorMode.BOX)
+                    vol.Required(
+                        "group_index", default=gs.group_index
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=99, mode=selector.NumberSelectorMode.BOX
+                        )
                     )
                 }
             ),

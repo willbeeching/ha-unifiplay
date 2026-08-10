@@ -11,7 +11,6 @@ from __future__ import annotations
 import posixpath
 import uuid
 from collections.abc import Callable
-from typing import Any
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -134,9 +133,7 @@ CREATE_ZONE_SCHEMA = vol.Schema(
 
 DELETE_ZONE_SCHEMA = vol.Schema(_ZONE)
 
-ADD_ZONE_MEMBER_SCHEMA = vol.Schema(
-    {**_ZONE, vol.Required(ATTR_DEVICE_ID): cv.string}
-)
+ADD_ZONE_MEMBER_SCHEMA = vol.Schema({**_ZONE, vol.Required(ATTR_DEVICE_ID): cv.string})
 
 REMOVE_ZONE_MEMBER_SCHEMA = vol.Schema(
     {**_ZONE, vol.Required(ATTR_DEVICE_ID): cv.string}
@@ -181,14 +178,16 @@ def _resolve_zone(
     uid = entry.unique_id or ""
     if not uid.startswith("unifi_play_zone_"):
         raise ServiceValidationError(f"{entity_id} is not a UniFi Play zone entity")
-    group_id = uid[len("unifi_play_zone_"):]
+    group_id = uid[len("unifi_play_zone_") :]
     for coordinator in hass.data.get(DOMAIN, {}).values():
         if group_id in coordinator.groups:
             return coordinator, group_id
     raise ServiceValidationError(f"Zone {group_id} not found in any active coordinator")
 
 
-def _zone_host_client(coordinator: UnifiPlayCoordinator, group_id: str) -> UnifiPlayMqttClient:
+def _zone_host_client(
+    coordinator: UnifiPlayCoordinator, group_id: str
+) -> UnifiPlayMqttClient:
     client = coordinator.get_host_mqtt_client(group_id)
     # Registered is not connected: publish_action drops commands silently
     # while the socket is down, so a zone write would report success and
@@ -287,7 +286,9 @@ def async_register_services(hass: HomeAssistant) -> None:
     # --- Zone management ---
 
     async def create_zone(call: ServiceCall) -> None:
-        host_coordinator, host_dev_id = resolve_device(hass, call.data["host_device_id"])
+        host_coordinator, host_dev_id = resolve_device(
+            hass, call.data["host_device_id"]
+        )
         host_state = (host_coordinator.data or {}).get(host_dev_id)
         if host_state is None:
             raise ServiceValidationError("Host device data not yet available")
@@ -354,7 +355,10 @@ def async_register_services(hass: HomeAssistant) -> None:
         if m_state is None:
             raise ServiceValidationError("Member device data not yet available")
 
-        if any(mac_normalise(d.get("mac", "")) == mac_normalise(m_state.mac) for d in gs.dev_info):
+        if any(
+            mac_normalise(d.get("mac", "")) == mac_normalise(m_state.mac)
+            for d in gs.dev_info
+        ):
             raise ServiceValidationError(f"{m_state.name} is already in this zone")
 
         m_mac = mac_normalise(m_state.mac)
@@ -371,9 +375,14 @@ def async_register_services(hass: HomeAssistant) -> None:
 
         new_dev_info = list(gs.dev_info) + [dev_info_entry(m_state)]
         coordinator.update_zone(
-            group_id=gs.group_id, name=gs.name, dev_info=new_dev_info,
-            group_index=gs.group_index, broadcasting_mode=gs.broadcasting_mode,
-            wb_enable=gs.wb_enable, wb_device=gs.wb_device, wb_input=gs.wb_input,
+            group_id=gs.group_id,
+            name=gs.name,
+            dev_info=new_dev_info,
+            group_index=gs.group_index,
+            broadcasting_mode=gs.broadcasting_mode,
+            wb_enable=gs.wb_enable,
+            wb_device=gs.wb_device,
+            wb_input=gs.wb_input,
         )
 
     async def remove_zone_member(call: ServiceCall) -> None:
@@ -397,9 +406,14 @@ def async_register_services(hass: HomeAssistant) -> None:
 
         if target != mac_normalise(gs.host_mac):
             coordinator.update_zone(
-                group_id=gs.group_id, name=gs.name, dev_info=new_dev_info,
-                group_index=gs.group_index, broadcasting_mode=gs.broadcasting_mode,
-                wb_enable=gs.wb_enable, wb_device=gs.wb_device, wb_input=gs.wb_input,
+                group_id=gs.group_id,
+                name=gs.name,
+                dev_info=new_dev_info,
+                group_index=gs.group_index,
+                broadcasting_mode=gs.broadcasting_mode,
+                wb_enable=gs.wb_enable,
+                wb_device=gs.wb_device,
+                wb_input=gs.wb_input,
             )
             return
 
@@ -412,18 +426,28 @@ def async_register_services(hass: HomeAssistant) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
         gs: UnifiPlayGroupState = coordinator.groups[group_id]
         coordinator.update_zone(
-            group_id=gs.group_id, name=call.data["name"], dev_info=gs.dev_info,
-            group_index=gs.group_index, broadcasting_mode=gs.broadcasting_mode,
-            wb_enable=gs.wb_enable, wb_device=gs.wb_device, wb_input=gs.wb_input,
+            group_id=gs.group_id,
+            name=call.data["name"],
+            dev_info=gs.dev_info,
+            group_index=gs.group_index,
+            broadcasting_mode=gs.broadcasting_mode,
+            wb_enable=gs.wb_enable,
+            wb_device=gs.wb_device,
+            wb_input=gs.wb_input,
         )
 
     async def set_zone_index(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
         gs: UnifiPlayGroupState = coordinator.groups[group_id]
         coordinator.update_zone(
-            group_id=gs.group_id, name=gs.name, dev_info=gs.dev_info,
-            group_index=call.data["group_index"], broadcasting_mode=gs.broadcasting_mode,
-            wb_enable=gs.wb_enable, wb_device=gs.wb_device, wb_input=gs.wb_input,
+            group_id=gs.group_id,
+            name=gs.name,
+            dev_info=gs.dev_info,
+            group_index=call.data["group_index"],
+            broadcasting_mode=gs.broadcasting_mode,
+            wb_enable=gs.wb_enable,
+            wb_device=gs.wb_device,
+            wb_input=gs.wb_input,
         )
 
     async def play_zone_announcement(call: ServiceCall) -> None:
@@ -441,7 +465,10 @@ def async_register_services(hass: HomeAssistant) -> None:
             host_state = coordinator.get_zone_host_state(group_id)
             if host_state:
                 for f in host_state.ann_files:
-                    if isinstance(f, dict) and f.get("name") == safe_name.split("/")[-1]:
+                    if (
+                        isinstance(f, dict)
+                        and f.get("name") == safe_name.split("/")[-1]
+                    ):
                         length = f.get("length", 0)
                         break
         client.play_announcement(safe_name, length, zone_play=True)
@@ -468,8 +495,16 @@ def async_register_services(hass: HomeAssistant) -> None:
         ("add_zone_member", add_zone_member, ADD_ZONE_MEMBER_SCHEMA),
         ("remove_zone_member", remove_zone_member, REMOVE_ZONE_MEMBER_SCHEMA),
         ("rename_zone", rename_zone, RENAME_ZONE_SCHEMA),
-        ("play_zone_announcement", play_zone_announcement, PLAY_ZONE_ANNOUNCEMENT_SCHEMA),
-        ("stop_zone_announcement", stop_zone_announcement, STOP_ZONE_ANNOUNCEMENT_SCHEMA),
+        (
+            "play_zone_announcement",
+            play_zone_announcement,
+            PLAY_ZONE_ANNOUNCEMENT_SCHEMA,
+        ),
+        (
+            "stop_zone_announcement",
+            stop_zone_announcement,
+            STOP_ZONE_ANNOUNCEMENT_SCHEMA,
+        ),
         ("set_zone_index", set_zone_index, SET_ZONE_INDEX_SCHEMA),
     ]
     for name, handler, schema in handlers:

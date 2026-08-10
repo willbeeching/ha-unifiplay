@@ -40,7 +40,7 @@ class UnifiPlayGroupState:
     broadcasting_mode: str
     wb_enable: bool
     wb_device: str  # MAC of the source Port when wideband is active
-    wb_input: str   # "lineIn" | "spdif" | "usb" | ""
+    wb_input: str  # "lineIn" | "spdif" | "usb" | ""
     dev_info: list[dict] = field(default_factory=list)
     host_mac: str = ""  # MAC of the device with host=True in dev_info
     # Epoch seconds stamped into the zone when it was last written. Devices
@@ -562,8 +562,12 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                     )
                 else:
                     old_gs = old_device_groups[gid]
-                    old_macs = {_norm_mac(d["mac"]) for d in old_gs.dev_info if d.get("mac")}
-                    new_macs = {_norm_mac(d["mac"]) for d in new_gs.dev_info if d.get("mac")}
+                    old_macs = {
+                        _norm_mac(d["mac"]) for d in old_gs.dev_info if d.get("mac")
+                    }
+                    new_macs = {
+                        _norm_mac(d["mac"]) for d in new_gs.dev_info if d.get("mac")
+                    }
                     added = new_macs - old_macs
                     removed = old_macs - new_macs
                     if added or removed:
@@ -656,9 +660,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         """Remove one zone from every connected device."""
         return self.publish_zones(group_id, None)
 
-    def publish_zones(
-        self, group_id: str, updated: dict | None
-    ) -> list[str]:
+    def publish_zones(self, group_id: str, updated: dict | None) -> list[str]:
         """Write a zone change out to EVERY connected device.
 
         ``updated`` is the new wire dict for the zone, or None to delete it.
@@ -704,7 +706,9 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 written.append(state.mac)
         _LOGGER.debug(
             "publish_zones: %d zone(s) -> %d device(s) %s",
-            len(groups), len(written), written,
+            len(groups),
+            len(written),
+            written,
         )
         return written
 
@@ -766,21 +770,6 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             if _norm_mac(state.mac) == target:
                 return state
         return None
-
-    def get_host_sibling_groups(self, group_id: str) -> list["UnifiPlayGroupState"]:
-        """Return every zone on the same host as group_id, excluding group_id itself.
-
-        Used by callers of update_group / set_group to build the sibling_groups
-        list that preserves other zones during a replace-all set_groups write.
-        """
-        target = self.groups.get(group_id)
-        if not target or not target.host_mac:
-            return []
-        host = _norm_mac(target.host_mac)
-        return [
-            gs for gs in self.groups.values()
-            if _norm_mac(gs.host_mac) == host and gs.group_id != group_id
-        ]
 
     def get_zone_members(
         self, group_id: str

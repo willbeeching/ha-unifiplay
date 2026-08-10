@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-
-import logging
 
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
@@ -20,14 +19,13 @@ from .const import (
     DOMAIN,
     OUTPUT_LABELS,
     OUTPUT_REVERSE,
-    source_value,
     is_amp,
     source_label,
     source_labels,
+    source_value,
 )
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState, UnifiPlayGroupState
 from .entity import UnifiPlayEntity, async_setup_platform_entities
-from .helpers import gs_to_dict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -285,9 +283,9 @@ class UnifiPlayZoneBroadcastingSelect(
         if not client:
             _LOGGER.warning("No MQTT client found for zone host %s", gs.host_mac)
             return
-        # update_group, not set_group: this changes only how the zone
-        # advertises itself, so the host's physical input must be left alone
-        # (set_group would additionally publish set_audio_src).
+        # This changes only how the zone advertises itself, so no physical
+        # input is touched - publishing set_audio_src here would switch a real
+        # input as a side effect.
         # Every other field is echoed back unchanged: the device replaces the
         # whole zone on each write, so omitting one would clear it.
         self.coordinator.update_zone(

@@ -17,9 +17,9 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -70,7 +70,9 @@ async def async_setup_entry(
     def _device_factory(device_id: str) -> list[UnifiPlayMediaPlayer]:
         return [UnifiPlayMediaPlayer(coordinator, device_id)]
 
-    async_setup_platform_entities(coordinator, entry, async_add_entities, _device_factory)
+    async_setup_platform_entities(
+        coordinator, entry, async_add_entities, _device_factory
+    )
 
     # Zone entities — one per group_id, added when a zone first appears and
     # removed (including their virtual device) when the zone is deleted.
@@ -91,7 +93,7 @@ async def async_setup_entry(
             uid = reg_entry.unique_id or ""
             if not uid.startswith("unifi_play_zone_"):
                 continue
-            gid = uid[len("unifi_play_zone_"):]
+            gid = uid[len("unifi_play_zone_") :]
             # UUIDs never contain underscores; a suffix like "_wideband" means
             # this is a per-zone binary sensor, not the zone media player — skip
             # it here and let the device-removal below clean it up indirectly.
@@ -110,7 +112,10 @@ async def async_setup_entry(
         # MCP) while HA was running, leaving the device record behind with no
         # entity to trigger the entity-registry path above.
         all_entries = dr.async_entries_for_config_entry(device_reg, entry.entry_id)
-        _LOGGER.debug("_sync_zones: scanning %d device entries for orphaned zones", len(all_entries))
+        _LOGGER.debug(
+            "_sync_zones: scanning %d device entries for orphaned zones",
+            len(all_entries),
+        )
         for dev_entry in all_entries:
             zone_gid: str | None = None
             for ident_tuple in dev_entry.identifiers:
@@ -120,11 +125,13 @@ async def async_setup_entry(
                     and isinstance(ident_tuple[1], str)
                     and ident_tuple[1].startswith("zone_")
                 ):
-                    zone_gid = ident_tuple[1][len("zone_"):]
+                    zone_gid = ident_tuple[1][len("zone_") :]
                     break
             if zone_gid is None or zone_gid in active:
                 continue
-            _LOGGER.warning("Removing orphaned zone device: %s (gid=%s)", dev_entry.id, zone_gid)
+            _LOGGER.warning(
+                "Removing orphaned zone device: %s (gid=%s)", dev_entry.id, zone_gid
+            )
             device_reg.async_remove_device(dev_entry.id)
             known_zones.pop(zone_gid, None)
 
@@ -563,11 +570,7 @@ class UnifiPlayZonePlayer(CoordinatorEntity[UnifiPlayCoordinator], MediaPlayerEn
         gs = self._group
         if gs is None:
             return {}
-        member_macs = {
-            mac_normalise(d["mac"])
-            for d in gs.dev_info
-            if d.get("mac")
-        }
+        member_macs = {mac_normalise(d["mac"]) for d in gs.dev_info if d.get("mac")}
         group_members = [
             state.mac
             for state in (self.coordinator.data or {}).values()
@@ -616,9 +619,10 @@ class UnifiPlayZonePlayer(CoordinatorEntity[UnifiPlayCoordinator], MediaPlayerEn
         # Preserve whichever zone member was set as the broadcast source;
         # fall back to host only if no device has been chosen yet.
         source_mac = gs.wb_device or gs.host_mac
-        # update_group, not set_group: the zone write belongs on the host, but
-        # the input switch belongs on the device that will actually broadcast.
-        # set_group would send both to the host, switching the wrong device.
+        # The zone write and the input switch go to different places: the
+        # zone goes to every device, but the input switch belongs on the one
+        # that will actually broadcast. Sending both to the host would switch
+        # the wrong device's input.
         self.coordinator.update_zone(
             group_id=gs.group_id,
             name=gs.name,

@@ -53,7 +53,9 @@ async def async_setup_entry(
         new_ids = [gid for gid in active if gid not in known_zone_sensors]
         if not new_ids:
             return
-        new_entities = [UnifiPlayZoneWidebandSensor(coordinator, gid) for gid in new_ids]
+        new_entities = [
+            UnifiPlayZoneWidebandSensor(coordinator, gid) for gid in new_ids
+        ]
         for e in new_entities:
             known_zone_sensors[e.zone_group_id] = e
         async_add_entities(new_entities)
@@ -63,6 +65,7 @@ async def async_setup_entry(
 
 
 # ── Per-physical-device binary sensors ───────────────────────────────────────
+
 
 class UnifiPlayAdminLockSensor(UnifiPlayEntity, BinarySensorEntity):
     """Reports whether the device's Admin Lock is engaged.
@@ -174,6 +177,7 @@ class UnifiPlayInZoneSensor(UnifiPlayEntity, BinarySensorEntity):
 
 
 # ── Per-zone binary sensors ───────────────────────────────────────────────────
+
 
 class UnifiPlayZoneWidebandSensor(
     CoordinatorEntity[UnifiPlayCoordinator], BinarySensorEntity
