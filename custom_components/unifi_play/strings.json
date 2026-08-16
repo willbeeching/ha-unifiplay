@@ -38,7 +38,8 @@
       "unknown": "Unexpected error. Check the Home Assistant logs for details."
     },
     "abort": {
-      "already_configured": "This controller is already configured."
+      "already_configured": "This controller is already configured.",
+      "already_configured_device": "Those speakers are already set up by \"{entry}\". A UniFi Play device can only belong to one entry: a second one covering the same hardware creates no entities at all, because every entity ID it would use is already taken. Remove the existing entry first if you want to set them up a different way."
     }
   },
   "services": {

@@ -13,7 +13,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import selector
@@ -82,6 +82,45 @@ def _parse_manual_hosts(raw: str) -> list[str]:
     return [h for h in raw.replace(",", " ").split() if h]
 
 
+def _entry_already_covering(hass: HomeAssistant, devices: list[dict]) -> str | None:
+    """Return the title of an existing entry already managing these devices.
+
+    Two entries cannot share hardware. Every entity's unique ID is built from
+    the device MAC and is not namespaced per entry, so a second entry covering
+    the same speaker produces a full set of colliding unique IDs; Home
+    Assistant rejects the later ones outright and the entry appears to create
+    nothing. Worse, which entry loses is a startup race, and a rejected entity
+    keeps its registry row while having no object behind it - so it reads
+    ``unavailable`` forever, with the only clue buried in the log.
+
+    The per-mode unique IDs set by each step (console host, and the literal
+    "direct") cannot catch this: a console entry and a direct entry have
+    genuinely different identities and still reach the same speakers. Overlap
+    is only visible once the hardware has actually been discovered, which is
+    why this runs after validation rather than at the top of the step.
+
+    Only loaded entries can be checked, since an entry that failed to set up
+    has no coordinator and no known devices. That is the right bias: an entry
+    which is not running is not claiming anything.
+
+    Returns the title rather than the entry so that a coordinator whose entry
+    has somehow gone from the registry still blocks setup; returning None there
+    would let the duplicate through on the one path where state is already
+    inconsistent.
+    """
+    macs = {mac_normalise(d.get("mac", "")) for d in devices if d.get("mac")}
+    if not macs:
+        return None
+    for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
+        covered = {
+            mac_normalise(state.mac) for state in coordinator.data.values() if state.mac
+        }
+        if covered & macs:
+            entry = hass.config_entries.async_get_entry(entry_id)
+            return entry.title if entry else "another UniFi Play entry"
+    return None
+
+
 class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for UniFi Play."""
 
@@ -125,12 +164,13 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(normalized_host)
             self._abort_if_unique_id_configured()
 
+            devices: list[dict] = []
             try:
                 # An empty device list is not a setup failure: the API
                 # answered, so host and key are good. api.validate_connection
                 # logs a warning and we create the entry anyway, so adding the
                 # integration before adopting hardware still works.
-                await api.validate_connection()
+                devices = await api.validate_connection()
             except UnifiPlayAuthError:
                 errors["base"] = "invalid_auth"
             except UnifiPlayForbiddenError:
@@ -158,6 +198,11 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
                 await api.close()
 
             if not errors:
+                if existing := _entry_already_covering(self.hass, devices):
+                    return self.async_abort(
+                        reason="already_configured_device",
+                        description_placeholders={"entry": existing},
+                    )
                 return self.async_create_entry(
                     title=f"UniFi Play ({normalized_host})",
                     data={
@@ -199,6 +244,11 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if not errors:
                 if found:
+                    if existing := _entry_already_covering(self.hass, found):
+                        return self.async_abort(
+                            reason="already_configured_device",
+                            description_placeholders={"entry": existing},
+                        )
                     return self.async_create_entry(
                         title="UniFi Play (Direct)",
                         data={
