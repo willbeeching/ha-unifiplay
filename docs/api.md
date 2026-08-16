@@ -405,16 +405,31 @@ accepts, and it maps 1:1 onto the five inputs the app offers:
 > `hdmiArc` or `hdmiIn` is silently ignored by the device; none of them are
 > real values. Do not "fix" `speakers` to one of those.
 
-A **UPL-AMP** has only eARC and Line In (no optical, no USB), and its eARC is
-reported as `spdif` rather than `speakers`. That mapping is **unverified** -
-inherited from the original implementation, never tested against real hardware,
-and suspect precisely because the Port turned out to differ from the assumption.
+Verified on a **UPL-AMP** (fw 1.0.38) the same way, by publishing each
+candidate with `set_audio_src` and reading back the device's reported `source`.
+The amp offers three inputs in the app, and **eARC is `speakers` here too**:
 
-For the same reason the PowerAmp's label is still `HDMI eARC` while the Port's
-is `eARC`. Aligning them would rename a source that existing automations select
-by name, and nobody has yet confirmed either the PowerAmp's device value or what
-its own app screen calls that input. The per-platform maps exist precisely so
-the two can disagree until there is evidence.
+| `source` | Play app label | Physical jack |
+|----------|----------------|---------------|
+| `streaming` | Streaming | none - network audio |
+| `speakers` | eARC | HDMI eARC |
+| `lineIn` | Line In | RCA analog in |
+
+> **The amp also accepts `spdif`, and it is a trap.** The device echoes it back
+> as its current source, but a PowerAmp has no optical jack and the Play app
+> offers no such input - it is shared firmware accepting a value it cannot
+> route. The integration deliberately omits it from the amp's map. Until
+> v1.3.0 the amp's `HDMI eARC` label pointed at exactly this value, so
+> selecting eARC on an amp reported success and passed no audio, which is the
+> same silent-nothing failure the `speakers` name caused on the Port.
+
+`hdmi`, `earc`, `eArc`, `arc` and `hdmiIn` were each published to an amp and
+left the source unchanged, so - as on the Port - none of them are real values.
+
+Both models therefore use `speakers` for eARC, and both label it `eARC`. The
+per-platform maps still must not be merged, but the reason is the inputs, not
+the values: the Port has optical S/PDIF and USB jacks the amp lacks, and the
+amp accepts `spdif` with nowhere to route it.
 
 Values seen elsewhere in captures but not confirmed as settable `source`
 values: `bluetooth`, `airplay`, `spotify`, `optical`. The first three look like
@@ -681,9 +696,10 @@ Any device in the zone can broadcast one of its physical inputs to the rest.
 - `wb_enable` - whether a wired source is being broadcast
 - `wb_device` - MAC of the device doing the broadcasting; **not** necessarily
   the host, which is why a UI must let the user pick which device
-- `wb_input` - a `source` value from the table above, so it is
-  **platform-specific**: eARC is `speakers` on a Port but `spdif` on an Amp.
-  Resolve it against the broadcasting device's own model, never a shared map.
+- `wb_input` - a `source` value from the tables above. eARC is `speakers` on
+  both models, but the input *sets* differ (a Port has S/PDIF and USB; an amp
+  has neither), so resolve it against the broadcasting device's own model
+  rather than a shared map.
 
 `""` for `wb_input` means no wired source: the zone is streaming.
 

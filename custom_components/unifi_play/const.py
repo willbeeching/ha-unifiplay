@@ -3,9 +3,19 @@
 Source values and zone (``groups``) fields are documented with their verified
 wire values in ``docs/api.md`` - see "Audio Source" and "Zones (groups)". Two
 things there are easy to get wrong and are worth reading before touching the
-maps below: ``speakers`` is the HDMI eARC input on an Audio Port (not a
-speaker output), and the same label maps to a different device value per
-model, so the per-platform maps must never be merged into one.
+maps below.
+
+``speakers`` is the HDMI eARC input - on both the Audio Port and the PowerAmp
+- and not a speaker output. Its plausible-looking name has now caused the same
+bug twice: labelled "Speakers" it hid eARC from the Port entirely, and on the
+amp its absence left eARC pointing at ``spdif``, which the firmware accepts
+and does nothing with.
+
+The per-platform maps must never be merged. Not because a label maps to
+different values per model (it does not - eARC is ``speakers`` on both) but
+because the models have different inputs: a Port has optical S/PDIF and USB
+jacks the amp lacks, and the amp accepts ``spdif`` without having anywhere to
+route it, so a merged map would offer inputs that silently do nothing.
 """
 
 DOMAIN = "unifi_play"
@@ -49,20 +59,27 @@ def is_amp(platform: str) -> bool:
 # S/PDIF jack and a separate eARC port, while a PowerAmp has only eARC and
 # Line In.
 #
-# UNVERIFIED: no PowerAmp was available when the Port values below were
-# established, so the eARC value here is inherited from the original map
-# rather than observed. Treat it with suspicion - the Audio Port turned out
-# to report eARC as "speakers", not the "hdmi"/"spdif" assumed here, so this
-# may well be "speakers" too. See #16.
+# Verified against a UPL-AMP on firmware 1.0.38 by publishing each candidate
+# with set_audio_src and reading back the device's own reported source. eARC
+# is "speakers", exactly as on the Port - the "spdif" assumed here previously
+# was never observed and never had a jack behind it. See #16.
 #
-# The label is deliberately left as "HDMI eARC" rather than renamed to match
-# the Port's "eARC": renaming it would break existing automations that select
-# the source by name, and there is no evidence yet that the PowerAmp's own app
-# screen calls it anything different. Rename it once someone with the hardware
-# confirms both the value and the app's wording.
+# The amp ALSO accepts and echoes back "spdif", but a PowerAmp has no optical
+# input and the Play app offers only three: Streaming, eARC, Line In. So
+# "spdif" is shared firmware accepting a value that routes nothing, and it is
+# deliberately absent here: offering it would put a fourth input in the UI
+# that silently does nothing. That is precisely what the old map did by
+# labelling it "HDMI eARC" - selecting eARC on an amp reported success and
+# passed no audio.
+#
+# Renamed to "eARC" to match both the app's own wording and the Port's label.
+# No working automation is broken by this: the string it replaces pointed at
+# the dead value, so anything selecting "HDMI eARC" was already a no-op. The
+# two platforms must agree, because a mixed-model zone offers the union of its
+# speakers' inputs and would otherwise list eARC twice under two names.
 SOURCE_LABELS_AMP = {
     "streaming": "Streaming",
-    "spdif": "HDMI eARC",
+    "speakers": "eARC",
     "lineIn": "Line In",
 }
 # Verified against a UPL-PORT on firmware 1.1.10 by setting each input in the
@@ -87,11 +104,16 @@ OUTPUT_LABELS = {
 }
 OUTPUT_REVERSE = {v: k for k, v in OUTPUT_LABELS.items()}
 
-# A PowerAmp has been seen reporting its eARC input as "hdmi"; that
-# canonicalises to the "spdif" value its own label map uses. This is
-# deliberately AMP-only: an Audio Port has both jacks, so applying the alias
+# A PowerAmp has been reported as describing its eARC input as "hdmi", so the
+# read path tolerates it and canonicalises to "speakers", the value the amp
+# was measured to use. Nothing here is load-bearing: probing an amp on 1.0.38
+# with "hdmi" (and "earc", "eArc", "arc", "hdmiIn") left the source unchanged,
+# so the device neither accepts nor emits it, and this only avoids showing a
+# raw value should some other firmware do so.
+#
+# Deliberately AMP-only: an Audio Port has both jacks, so applying the alias
 # there would collapse eARC and optical S/PDIF into a single entry.
-SOURCE_ALIASES_AMP = {"hdmi": "spdif"}
+SOURCE_ALIASES_AMP = {"hdmi": "speakers"}
 
 
 def source_labels(platform: str) -> dict[str, str]:
