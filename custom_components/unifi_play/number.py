@@ -16,7 +16,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, is_amp
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
-from .entity import UnifiPlayEntity, async_setup_platform_entities
+from .entity import (
+    UnifiPlayEntity,
+    async_setup_optional_entities,
+    async_setup_platform_entities,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -26,6 +30,9 @@ class UnifiPlayNumberDescription(NumberEntityDescription):
     value_fn: Callable[[UnifiPlayDeviceState], float]
     set_fn: str
     amp_only: bool = False
+    # Optional hardware: created only once the device reports a subwoofer
+    # attached, not merely because the model has a sub output. See #17.
+    requires_sub: bool = False
 
 
 NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
@@ -93,6 +100,7 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
         value_fn=lambda s: float(s.sub_crossover),
         set_fn="set_sub_crossover",
         amp_only=True,
+        requires_sub=True,
     ),
     UnifiPlayNumberDescription(
         key="sub_level",
@@ -106,6 +114,7 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
         value_fn=lambda s: float(s.sub_level),
         set_fn="set_sub_level",
         amp_only=True,
+        requires_sub=True,
     ),
     UnifiPlayNumberDescription(
         key="announcement_volume",
@@ -140,12 +149,28 @@ async def async_setup_entry(
         entities: list[NumberEntity] = [
             UnifiPlayNumber(coordinator, device_id, desc)
             for desc in NUMBERS
-            if not desc.amp_only or is_amp(state.platform)
+            if (not desc.amp_only or is_amp(state.platform)) and not desc.requires_sub
         ]
         entities += [UnifiPlayEqBand(coordinator, device_id, band) for band in EQ_BANDS]
         return entities
 
     async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
+
+    def _sub_factory(device_id: str) -> list[NumberEntity]:
+        state = coordinator.data[device_id]
+        return [
+            UnifiPlayNumber(coordinator, device_id, desc)
+            for desc in NUMBERS
+            if desc.requires_sub and (not desc.amp_only or is_amp(state.platform))
+        ]
+
+    async_setup_optional_entities(
+        coordinator,
+        entry,
+        async_add_entities,
+        _sub_factory,
+        lambda s: s.subwoofer,
+    )
 
 
 class UnifiPlayNumber(UnifiPlayEntity, NumberEntity):

@@ -25,7 +25,11 @@ from .const import (
     source_value,
 )
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState, UnifiPlayGroupState
-from .entity import UnifiPlayEntity, async_setup_platform_entities
+from .entity import (
+    UnifiPlayEntity,
+    async_setup_optional_entities,
+    async_setup_platform_entities,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,11 +77,16 @@ class UnifiPlaySelectDescription(SelectEntityDescription):
     # to resolve, so there is no meaningful label-only conversion.
     convert_fn: Callable[[str], str | int] | None = None
     amp_only: bool = False
+    # Optional hardware: created only once the device reports a
+    # subwoofer attached, not merely because the model has a sub
+    # output. See #17.
+    requires_sub: bool = False
     port_only: bool = False
     options_fn: Callable[[UnifiPlayDeviceState], list[str]] | None = None
     # Set instead of convert_fn when the label -> device value mapping depends
-    # on the hardware: "eARC" is "speakers" on an Audio Port but "spdif" on a
-    # PowerAmp, so the source select cannot use one platform-blind map.
+    # on the hardware. eARC is "speakers" on both models, but the input sets
+    # differ - a Port has S/PDIF and USB jacks the amp lacks - so the source
+    # select cannot use one platform-blind map.
     convert_state_fn: Callable[[UnifiPlayDeviceState, str], str | int] | None = None
 
 
@@ -138,6 +147,7 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
         set_fn="set_sub_phase",
         convert_fn=lambda v: int(PHASE_REVERSE[v]),
         amp_only=True,
+        requires_sub=True,
     ),
     UnifiPlaySelectDescription(
         key="channels",
@@ -190,9 +200,26 @@ async def async_setup_entry(
             for desc in SELECTS
             if (not desc.amp_only or is_amp(state.platform))
             and (not desc.port_only or not is_amp(state.platform))
+            and not desc.requires_sub
         ]
 
     async_setup_platform_entities(coordinator, entry, async_add_entities, _factory)
+
+    def _sub_factory(device_id: str) -> list[UnifiPlaySelect]:
+        state = coordinator.data[device_id]
+        return [
+            UnifiPlaySelect(coordinator, device_id, desc)
+            for desc in SELECTS
+            if desc.requires_sub and (not desc.amp_only or is_amp(state.platform))
+        ]
+
+    async_setup_optional_entities(
+        coordinator,
+        entry,
+        async_add_entities,
+        _sub_factory,
+        lambda s: s.subwoofer,
+    )
 
     # Dynamic zone-level selects — one per zone, created and cleaned up as
     # zones appear and disappear, mirroring the pattern in binary_sensor.py.

@@ -42,6 +42,45 @@ def async_setup_platform_entities(
     entry.async_on_unload(coordinator.async_add_listener(_sync))
 
 
+def async_setup_optional_entities(
+    coordinator: UnifiPlayCoordinator,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    factory: Callable[[str], Iterable[Entity]],
+    present: Callable[[UnifiPlayDeviceState], bool],
+) -> None:
+    """Create entities for optional hardware, once the device reports it.
+
+    Some entities describe hardware that may or may not be attached - a
+    subwoofer on a PowerAmp, say. The device only says so over MQTT, well
+    after discovery has created everything else, so this cannot be a check
+    inside the normal factory: at the moment that runs the flag is still at
+    its default and the entities would be suppressed on every device,
+    including the ones that do have the hardware.
+
+    Entities are never removed once added. These flags are sent only while
+    true - the device stops sending the key rather than sending false - so a
+    flag going absent means "no news", not "hardware removed". Acting on that
+    would delete the entities on every reconnect. Stale entities after
+    unplugging are the accepted cost.
+    """
+    added: set[str] = set()
+
+    def _sync() -> None:
+        new_ids = [
+            dev_id
+            for dev_id, state in coordinator.data.items()
+            if dev_id not in added and present(state)
+        ]
+        if not new_ids:
+            return
+        added.update(new_ids)
+        async_add_entities([entity for dev_id in new_ids for entity in factory(dev_id)])
+
+    _sync()
+    entry.async_on_unload(coordinator.async_add_listener(_sync))
+
+
 class UnifiPlayEntity(CoordinatorEntity[UnifiPlayCoordinator]):
     """Base class for all UniFi Play entities."""
 
