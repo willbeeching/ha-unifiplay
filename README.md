@@ -224,6 +224,31 @@ see [docs/apollo.md](docs/apollo.md).
 
 For anything else, enable debug logging (**Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging**), retry setup, and share lines containing `custom_components.unifi_play` in a GitHub issue (redact your API key). At debug level the integration logs the exact URL requested, HTTP status, and response body.
 
+## Contributing
+
+Pull requests are very welcome — most of what this integration can do came from people testing
+against hardware the author doesn't own. If you're adding protocol knowledge, please record how you
+verified it in [`docs/api.md`](docs/api.md); a measured value beats a plausible one, and negative
+results are worth writing down too.
+
+Set up the hooks once per clone:
+
+```bash
+pip install pre-commit && pre-commit install
+```
+
+That wires up both stages. **On commit**, black and isort reformat the files you're committing — if
+they change anything the commit stops so you can re-stage. **On push**, flake8 and a check that
+every call on the MQTT client resolves to a method that actually exists run against the whole
+package. That last one exists because v1.2.0 shipped calling two methods that had been deleted, and
+nothing in the pipeline could see it: flake8 finds undefined *names*, never a missing *attribute*.
+
+Formatting deliberately runs at commit rather than push. Rewriting files at push time would be
+useless — the commits being pushed already contain the unformatted code.
+
+Python 3.13 is needed, matching CI and Home Assistant itself. The same checks run in CI, so hooks
+are a convenience rather than the gate.
+
 ## Support
 
 This was reverse-engineered and vibe-coded over many late nights, and the AI tokens don't pay for

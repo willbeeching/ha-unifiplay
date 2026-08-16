@@ -1,0 +1,69 @@
+# Local mirror of the CI job in .github/workflows/ci.yaml.
+#
+# Install once per clone:
+#   pip install pre-commit && pre-commit install
+#
+# `pre-commit install` wires up both hook types listed below, so formatting
+# runs at commit time and the slower whole-repo checks run at push time.
+#
+# Why the split: black and isort REWRITE files. At push time that is useless -
+# the commits being pushed already contain the unformatted code, so a fix then
+# would leave a dirty tree and still push the bad commits. Formatting has to
+# happen while the commit is being made. Checks that only ever report, and that
+# need to see the whole package rather than the staged subset, belong at push.
+default_install_hook_types: [pre-commit, pre-push]
+
+# 3.13 because __init__.py uses the 3.12+ `type X = Y` statement: an older
+# interpreter cannot parse the package at all, and flake8 reports E999 on a
+# file that is perfectly valid. Home Assistant requires 3.13 itself, so this
+# is no extra burden on contributors.
+default_language_version:
+  python: python3.13
+
+repos:
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 26.5.1
+    hooks:
+      - id: black
+        files: ^custom_components/unifi_play/
+        stages: [pre-commit]
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 8.0.1
+    hooks:
+      - id: isort
+        files: ^custom_components/unifi_play/
+        stages: [pre-commit]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # strings.json and translations/en.json are hand-edited and a trailing
+      # comma there breaks the config flow's UI text with no other warning.
+      - id: check-json
+      - id: check-yaml
+        files: ^(\.github/workflows/|custom_components/unifi_play/services\.yaml)
+      - id: check-merge-conflict
+
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+        # The same selection CI blocks on. The wider run in CI is --exit-zero
+        # and advisory, so it is deliberately not mirrored here.
+        args: [--count, "--select=E9,F63,F7,F82", --show-source, --statistics]
+        files: ^custom_components/unifi_play/
+        stages: [pre-push]
+
+  - repo: local
+    hooks:
+      - id: mqtt-client-calls
+        name: MQTT client calls resolve
+        # Catches the v1.2.0 failure: a call on the client whose method has
+        # been removed. Needs the whole package, so it cannot be a per-file
+        # hook, and it is fast enough to run on every push.
+        entry: python3.13 scripts/check_mqtt_client_calls.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

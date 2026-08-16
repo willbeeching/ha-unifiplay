@@ -42,6 +42,15 @@ from pathlib import Path
 CLASS_NAME = "UnifiPlayMqttClient"
 PACKAGE = Path(__file__).resolve().parent.parent / "custom_components" / "unifi_play"
 
+if sys.version_info < (3, 12):
+    # __init__.py uses the 3.12+ `type X = Y` statement. Without this the run
+    # dies on a SyntaxError pointing at a perfectly valid file, which reads as
+    # "the integration is broken" rather than "your interpreter is old".
+    sys.exit(
+        f"needs Python 3.12+ to parse the package (running "
+        f"{sys.version_info.major}.{sys.version_info.minor})"
+    )
+
 
 def _annotation_names(node: ast.AST | None) -> set[str]:
     """Every bare name mentioned in an annotation expression."""
