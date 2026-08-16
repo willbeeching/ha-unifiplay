@@ -675,7 +675,46 @@ nobody or by two devices at once.
 
 After the handoff the old host's device-level `hosting_group` field stays stale
 until it pushes a fresh `info` event. That field comes from the device's own
-reporting, so it cannot be corrected locally; it self-heals.
+reporting, so it cannot be corrected locally.
+
+It does **not** always self-heal. `hosting_group` and `sync_devices` are sent
+only while true, so a device that leaves every zone simply stops sending the
+keys and its last values stand indefinitely - confirmed on two UPL-AMPs, which
+still reported their old `hosting_group` and `sync_devices: true` through
+several fresh `info` events after their zones were deleted, while the `groups`
+event correctly reported none. Never derive membership from these fields; use
+zone membership, as `binary_sensor` does.
+
+##### A device may belong to more than one zone
+
+The Play app allows only one zone per device and the integration enforces the
+same, but **that is app policy, not a firmware limit.** Tested directly on two
+UPL-AMPs (fw 1.0.38) by publishing a two-zone list where both zones contained
+both devices:
+
+| state written | what each device reported |
+|---|---|
+| one zone, both members | 1 zone, both devices agreeing |
+| two zones, both members of each | **2 zones on both devices** |
+| after an 8s settle | still 2 zones, nothing dropped |
+
+No rejection, no silent drop, no revert on resync. Overlapping membership is
+accepted by `set_groups`.
+
+The real constraint is hosting, not membership. `hosting_group` is a single
+scalar, so a device has no way to report hosting two zones at once. In the test
+each device hosted a different zone and both reported correctly; a device asked
+to host two would leave the second with no authoritative reporter, which
+matters because zone state prefers the copy whose reporting device names itself
+host.
+
+Two things this test did **not** establish, before anyone builds on it:
+
+- **Whether playback is coherent.** Nothing was streaming. How audio behaves
+  when a speaker belongs to two zones playing different sources is untested.
+- **Whether it survives the app.** The app republishes its own view and cannot
+  represent overlapping zones, so opening a zone screen would likely collapse
+  them - the same equal-peers race described above.
 
 ##### `broadcasting_mode` - stream broadcasting
 
