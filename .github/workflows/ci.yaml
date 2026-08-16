@@ -38,6 +38,13 @@ jobs:
           flake8 custom_components/unifi_play/ --count --select=E9,F63,F7,F82 --show-source --statistics
           flake8 custom_components/unifi_play/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
+      # flake8's selection above catches undefined names, never a missing
+      # attribute on an object it cannot type - which is how v1.2.0 shipped
+      # calling two methods that no longer existed (#13).
+      - name: Check MQTT client calls resolve
+        run: |
+          python scripts/check_mqtt_client_calls.py
+
   hacs:
     name: HACS Validation
     runs-on: ubuntu-latest
