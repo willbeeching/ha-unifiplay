@@ -436,9 +436,37 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                     state.firmware = dev["firmware"]
             ip = dev.get("ip", "")
             mac = dev.get("mac", "")
-            if ip and mac and dev_id not in self._mqtt_clients:
-                await self._start_mqtt(dev_id, ip, mac)
+            if ip and mac:
+                await self._ensure_mqtt(dev_id, ip, mac)
         return self._device_states
+
+    async def _ensure_mqtt(self, device_id: str, ip: str, mac: str) -> None:
+        """Connect the device's MQTT client, replacing one that has dropped.
+
+        paho's ``loop()`` does not reconnect on its own - only
+        ``loop_forever()`` does - so a connection that succeeds and later
+        drops stays dead for the life of the config entry. Because the client
+        object remains in ``_mqtt_clients``, a guard that only asked whether
+        the device was absent from that dict never retried it: the speaker is
+        reachable again, the coordinator is polling happily, and nothing
+        reconnects. Asking the connection rather than the dict makes this poll
+        the reconnect loop the module docstring always described.
+
+        A console outage is enough to trigger it - the brokers live on the
+        speakers, but whatever takes the console away usually takes the
+        speakers with it, and only the console comes back on its own.
+        """
+        existing = self._mqtt_clients.get(device_id)
+        if existing is not None:
+            if existing.is_connected:
+                return
+            _LOGGER.info("MQTT connection to %s dropped; reconnecting", ip)
+            try:
+                await existing.disconnect()
+            except Exception:  # noqa: BLE001 - a dead client may fail any way
+                _LOGGER.debug("Cleanup of dropped MQTT client for %s failed", ip)
+            self._mqtt_clients.pop(device_id, None)
+        await self._start_mqtt(device_id, ip, mac)
 
     async def _start_mqtt(self, device_id: str, ip: str, mac: str) -> None:
         """Start an MQTT connection for a device."""
