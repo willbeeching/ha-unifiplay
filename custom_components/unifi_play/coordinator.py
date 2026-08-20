@@ -272,11 +272,19 @@ class UnifiPlayDeviceState:
             # timestamp instead of being noticed weeks later. See docs/api.md,
             # "Graphic EQ".
             if self.eq_custom_presets and not new_presets:
+                # Names are read defensively: this is a log line, and
+                # _handle_event has no guard around it, so an entry that is
+                # not a dict must not be able to take the state update down
+                # with it. Same reason select.py checks before reading "name".
+                names = [
+                    p.get("name") for p in self.eq_custom_presets if isinstance(p, dict)
+                ]
                 _LOGGER.warning(
-                    "%s: custom EQ presets disappeared (device previously "
-                    "reported %s, now none)",
+                    "%s: custom EQ presets are now empty (device previously "
+                    "reported %s). Expected if you just deleted the last one "
+                    "in the Play app; otherwise the device has lost them",
                     self.name,
-                    [p.get("name") for p in self.eq_custom_presets],
+                    names,
                 )
             self.eq_custom_presets = new_presets
         # Which saved preset is loaded, "" when a built-in profile is active.

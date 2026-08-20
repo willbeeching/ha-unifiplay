@@ -149,7 +149,9 @@ def main() -> int:
     trees: dict[Path, ast.Module] = {}
     for path in sorted(PACKAGE.glob("*.py")):
         try:
-            trees[path] = ast.parse(path.read_text(), filename=str(path))
+            trees[path] = ast.parse(
+                path.read_text(encoding="utf-8"), filename=str(path)
+            )
         except SyntaxError as err:
             print(f"{path}: could not parse: {err}", file=sys.stderr)
             return 2

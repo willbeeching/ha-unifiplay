@@ -562,6 +562,19 @@ slider is in motion and `true` on release.
 
 Five things worth knowing:
 
+- **Preset recall is `active_preset`, not `profile` and not `preset_name`.**
+  `{"profile": "custom", "active_preset": "<name>"}` recalls. Passing the preset
+  name as `profile` is accepted silently and does nothing, which reads exactly
+  like a device-side bug until you find the right field.
+- **`preset_action: "apply"` DELETES the preset.** Discovered by losing one. The
+  management verbs are `mod` (rename, with `preset_rename`) and `del`.
+- **`0.01` is the app's placeholder for an untouched band, not a real baseline.**
+  The device echoes those bands back as `0.0` in `active_table` and rounds gains
+  to 1 dp - send `{1k: 0.89, rest: 0.01}` and it reports `{1k: 0.9, rest: 0.0}`.
+  Sending `0` to flatten a band is correct.
+- **The built-in profiles report a flat `active_table`.** Their shaping happens
+  inside the device, so reading the table back while a built-in profile is
+  active tells you nothing about what you are hearing.
 - **Presets persist across a graceful reboot — but one field wipe has been
   seen.** Verified on a PowerAmp (fw `1.0.38.37ed30f`): two presets — one
   created minutes earlier, one two days old — both survived a reboot via the
@@ -576,19 +589,6 @@ Five things worth knowing:
   restarts but not proven durable against power loss. The coordinator logs a
   warning when a device's preset list transitions from populated to empty, so
   a future wipe carries a timestamp instead of surfacing weeks later.
-- **Preset recall is `active_preset`, not `profile` and not `preset_name`.**
-  `{"profile": "custom", "active_preset": "<name>"}` recalls. Passing the preset
-  name as `profile` is accepted silently and does nothing, which reads exactly
-  like a device-side bug until you find the right field.
-- **`preset_action: "apply"` DELETES the preset.** Discovered by losing one. The
-  management verbs are `mod` (rename, with `preset_rename`) and `del`.
-- **`0.01` is the app's placeholder for an untouched band, not a real baseline.**
-  The device echoes those bands back as `0.0` in `active_table` and rounds gains
-  to 1 dp - send `{1k: 0.89, rest: 0.01}` and it reports `{1k: 0.9, rest: 0.0}`.
-  Sending `0` to flatten a band is correct.
-- **The built-in profiles report a flat `active_table`.** Their shaping happens
-  inside the device, so reading the table back while a built-in profile is
-  active tells you nothing about what you are hearing.
 
 #### Quiet hours
 
