@@ -560,8 +560,22 @@ Action: `set_equalizer`.
 Ten fixed bands, plus or minus 12 dB. The app sends `info_sync: false` while a
 slider is in motion and `true` on release.
 
-Four things worth knowing:
+Five things worth knowing:
 
+- **Presets persist across a graceful reboot — but one field wipe has been
+  seen.** Verified on a PowerAmp (fw `1.0.38.37ed30f`): two presets — one
+  created minutes earlier, one two days old — both survived a reboot via the
+  device's `restart` action, timestamps intact. The same device had earlier
+  come back with an empty `custom_presets` after an unattended overnight
+  reboot during electrical maintenance: firmware unchanged, and no client on
+  the network could have deleted them (every released version of this
+  integration recalls via `active_preset`; nothing sends `del` unasked).
+  Cause undetermined; hard power loss is the suspect. What would settle it:
+  cut mains power while holding a known preset list, then read back
+  `custom_presets`. Until then, treat preset storage as durable against clean
+  restarts but not proven durable against power loss. The coordinator logs a
+  warning when a device's preset list transitions from populated to empty, so
+  a future wipe carries a timestamp instead of surfacing weeks later.
 - **Preset recall is `active_preset`, not `profile` and not `preset_name`.**
   `{"profile": "custom", "active_preset": "<name>"}` recalls. Passing the preset
   name as `profile` is accepted silently and does nothing, which reads exactly

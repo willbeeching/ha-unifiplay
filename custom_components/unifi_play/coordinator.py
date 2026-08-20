@@ -263,7 +263,22 @@ class UnifiPlayDeviceState:
         if isinstance(body.get("active_table"), dict):
             self.eq_table = dict(body["active_table"])
         if isinstance(body.get("custom_presets"), list):
-            self.eq_custom_presets = body["custom_presets"]
+            new_presets = body["custom_presets"]
+            # A populated -> empty transition is what a device-side preset
+            # wipe looks like from here. One has been seen in the field
+            # (PowerAmp fw 1.0.38: presets present for days, gone after an
+            # unattended reboot) while a controlled graceful restart preserved
+            # them - cause undetermined, so make the next occurrence carry a
+            # timestamp instead of being noticed weeks later. See docs/api.md,
+            # "Graphic EQ".
+            if self.eq_custom_presets and not new_presets:
+                _LOGGER.warning(
+                    "%s: custom EQ presets disappeared (device previously "
+                    "reported %s, now none)",
+                    self.name,
+                    [p.get("name") for p in self.eq_custom_presets],
+                )
+            self.eq_custom_presets = new_presets
         # Which saved preset is loaded, "" when a built-in profile is active.
         if "active_preset" in body:
             self.eq_active_preset = body["active_preset"]
