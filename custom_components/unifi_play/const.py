@@ -216,3 +216,10 @@ BROADCASTING_MODE_REVERSE: dict[str, str] = {
 EVENT_ZONE_CREATED = "unifi_play_zone_created"
 EVENT_ZONE_DELETED = "unifi_play_zone_deleted"
 EVENT_ZONE_MEMBER_CHANGED = "unifi_play_zone_member_changed"
+
+#: Delays (seconds) after a set_groups write at which zones are re-read, to
+#: learn the host the firmware elects. The device never pushes a groups event
+#: to announce the election, so a listener that does not ask keeps a hostless
+#: copy. Spread out because election timing is not specified anywhere and has
+#: been observed to take a while on some firmware.
+HOST_ELECTION_REREAD_DELAYS = (3, 10, 30)

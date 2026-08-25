@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -19,6 +20,7 @@ from .const import (
     EVENT_ZONE_CREATED,
     EVENT_ZONE_DELETED,
     EVENT_ZONE_MEMBER_CHANGED,
+    HOST_ELECTION_REREAD_DELAYS,
 )
 from .discovery import async_resolve_direct
 from .mqtt_client import MqttCertificateRejected, UnifiPlayMqttClient
@@ -49,9 +51,11 @@ class UnifiPlayGroupState:
     wb_input: str  # "lineIn" | "spdif" | "usb" | ""
     dev_info: list[dict] = field(default_factory=list)
     host_mac: str = ""  # MAC of the device with host=True in dev_info
-    # Epoch seconds stamped into the zone when it was last written. Devices
-    # echo it back unchanged, which makes it the only way to tell a fresh
-    # copy of a zone from a stale one when several devices report it.
+    # Always 0. set_groups accepts a per-group timestamp, but the groups event
+    # carries one only at the top level of the body - never inside a group - so
+    # nothing ever populates this. The merge tie-break below that compares it
+    # is therefore vestigial: it compares zeroes and falls through to the host
+    # preference. Kept as a field only to document the dead end.
     timestamp: int = 0
 
     @classmethod
@@ -838,7 +842,32 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             len(written),
             written,
         )
+        if written:
+            self._schedule_host_election_reread()
         return written
+
+    def _schedule_host_election_reread(self) -> None:
+        """Re-read zones shortly after a write, to learn the elected host.
+
+        "host" is firmware-owned: the device elects one after a set_groups
+        write and does NOT push a groups event to announce it. Without asking
+        again, host_mac stays empty until the next reconnect, and every
+        host-routed operation on a freshly written zone fails - rename, add or
+        remove a member, set the source, reorder, or creating a second zone on
+        the same speaker.
+
+        Re-reads are cheap (a groups request per connected device) and
+        idempotent, so this fires a short series rather than betting on one
+        delay being right for every firmware.
+        """
+
+        def _reread(_now: datetime | None = None) -> None:
+            for client in self._mqtt_clients.values():
+                if client is not None and client.is_connected:
+                    client.request_groups()
+
+        for delay in HOST_ELECTION_REREAD_DELAYS:
+            async_call_later(self.hass, delay, _reread)
 
     def get_mqtt_client(self, device_id: str) -> UnifiPlayMqttClient | None:
         """Return the MQTT client for a device."""

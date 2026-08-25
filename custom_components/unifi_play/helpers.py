@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -11,6 +12,8 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState, UnifiPlayGroupState
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def mac_normalise(mac: str) -> str:
@@ -55,22 +58,54 @@ def resolve_device(
     raise ServiceValidationError(f"No live UniFi Play device for {device_id}")
 
 
-def dev_info_entry(
-    state: UnifiPlayDeviceState, *, host: bool = False
-) -> dict[str, Any]:
-    """Build a dev_info member dict from a device state."""
+#: Keys the UniFi Play app sends in a dev_info entry. Everything else a device
+#: echoes back (notably "host") is firmware-owned and must not be written back.
+APP_DEV_INFO_KEYS = frozenset({"type", "mac", "name", "ip", "color"})
+
+
+def dev_info_entry(state: UnifiPlayDeviceState) -> dict[str, Any]:
+    """Build a dev_info member dict from a device state.
+
+    Deliberately omits "host". Captured set_groups writes from the UniFi Play
+    app never carry that key: the firmware elects a host itself and echoes the
+    flag back afterwards. Asserting it on the wire produces a zone that
+    registers membership on every device but never carries audio to the
+    members. Note that "host": false is not equivalent - the app omits the key.
+    """
     return {
         "type": state.platform,
         "mac": state.mac,
         "name": state.name,
         "ip": state.ip,
         "color": "black",
-        "host": host,
     }
 
 
+def strip_firmware_keys(dev_info: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop firmware-owned keys from dev_info before writing it back.
+
+    Only APP_DEV_INFO_KEYS survive. Anything else a device added - "host"
+    above all - is the firmware's to set, not ours to echo.
+    """
+    stripped = []
+    for entry in dev_info:
+        dropped = set(entry) - APP_DEV_INFO_KEYS - {"host"}
+        if dropped:
+            _LOGGER.debug("dropping unrecognised dev_info key(s) %s", sorted(dropped))
+        stripped.append({k: v for k, v in entry.items() if k in APP_DEV_INFO_KEYS})
+    return stripped
+
+
 def gs_to_dict(gs: UnifiPlayGroupState) -> dict[str, Any]:
-    """Serialise a UnifiPlayGroupState to the dict format set_groups expects."""
+    """Serialise a device-reported zone back to set_groups form, verbatim.
+
+    Deliberately echoes the firmware-owned "host" flag rather than stripping
+    it. publish_zones() rebuilds the whole group list on every write, so this
+    runs for zones that are not being edited; blanking their host would force a
+    re-election on an untouched - possibly playing - zone every time the user
+    renames a different one. Only the zone actually being written goes through
+    group_payload(), which strips firmware-owned keys.
+    """
     return {
         "group_id": gs.group_id,
         "name": gs.name,
@@ -94,22 +129,25 @@ def move_zone_to_new_host(
     """Hand a zone to a new host after its current host has been removed.
 
     ``new_dev_info`` is the surviving device list with the removed device
-    already filtered out; the first entry is promoted to host. Callers must
-    have enforced the two-device zone minimum first, so index 0 always exists.
-    The list is mutated, so pass copies - ``gs.dev_info`` is the live list the
-    coordinator holds, and editing it in place would corrupt cached state.
+    already filtered out. Callers must have enforced the two-device zone
+    minimum first, so index 0 always exists. The list is mutated, so pass
+    copies - ``gs.dev_info`` is the live list the coordinator holds, and
+    editing it in place would corrupt cached state.
+
+    The successor is NOT named here. "host" is firmware-owned (see
+    dev_info_entry): the zone is rewritten without a host and the surviving
+    devices elect one, exactly as they do for a newly created zone. Writing
+    the flag ourselves is what breaks audio sync to members.
 
     Because publish_zones sends the complete zone list to every device, the
-    handover is a single write: the old host receives the same list as
-    everyone else, already naming the new host, so there is no separate
-    "strip it from the old host" step and no window in which two devices
-    believe they host the same zone.
+    handover is still a single write - the old host receives the same list as
+    everyone else, so there is no separate "strip it from the old host" step.
+
+    UNVERIFIED: re-election after a host is removed from a live zone has not
+    been confirmed on hardware, only re-election on zone creation has.
 
     Raises ServiceValidationError when no device can be written to.
     """
-    for idx, dev in enumerate(new_dev_info):
-        dev["host"] = idx == 0
-
     # If the removed device was the one broadcasting a wired source, that
     # source leaves with it, so the zone falls back to streaming.
     keep_wb = gs.wb_enable and mac_normalise(
@@ -154,12 +192,17 @@ def group_payload(
     return {
         "group_id": group_id,
         "name": name,
-        "dev_info": dev_info,
+        "dev_info": strip_firmware_keys(dev_info),
         "dev_count": len(dev_info),
         "group_index": group_index,
         "broadcasting_mode": broadcasting_mode,
+        # The app omits these three when broadcasting is off, but "off" is an
+        # active command here (Set audio source -> Streaming), and whether the
+        # firmware reads an absent wb_enable as "off" or as "leave unchanged"
+        # is unverified. Keep sending them explicitly.
         "wb_enable": wb_enable,
         "wb_device": wb_device,
         "wb_input": wb_input,
-        "timestamp": int(time.time()),
+        # No per-group timestamp: set_groups accepts one but the groups event
+        # never echoes it back, so it is write-only noise.
     }

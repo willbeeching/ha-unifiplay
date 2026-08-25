@@ -134,7 +134,7 @@ Open **Settings → Devices & Services → UniFi Play → Configure**:
 |--------|--------------|
 | **Create zone** | Pick two or more speakers. A speaker can only be in one zone at a time, so speakers already in a zone are not offered |
 | **Rename / Reorder** | Change the display name or sort index (`group_index`) |
-| **Add / Remove member** | The host cannot be removed — delete the zone instead |
+| **Add / Remove member** | Removing the hosting speaker hands the host role to another member rather than failing. A zone needs at least two speakers — to go below that, delete the zone |
 | **Set audio source** | **Streaming** lets each device play independently. **Broadcast wired source** sends one speaker's physical input (Line In, S/PDIF / eARC, USB) to every other speaker in the zone — any zone member can be the source, not just the host |
 | **Delete zone** | All members return to standalone mode |
 
@@ -142,7 +142,7 @@ Open **Settings → Devices & Services → UniFi Play → Configure**:
 
 ### Entities
 
-Each zone gets a `media_player` entity with volume, mute, and a source selector offering Streaming plus whatever its speakers can broadcast (an Audio Port: eARC / Line In / S/PDIF / USB; a PowerAmp: eARC / Line In). Key state attributes: `group_id`, `group_members` (online member MACs), `wb_enable`, `wb_input`, `host_mac`, `dev_count`.
+Each zone gets a `media_player` entity with volume, mute, and a source selector offering Streaming plus whatever its speakers can broadcast (an Audio Port: eARC / Line In / S/PDIF / USB; a PowerAmp: eARC / Line In). Key state attributes: `group_id`, `group_members` (online member MACs), `wb_enable`, `wb_input`, `host_mac`, `dev_count`. `host_mac` is empty on a freshly created zone — the speakers elect a host themselves shortly after, and it is populated from then on.
 
 Two binary sensors are also created per zone/device:
 
@@ -173,6 +173,8 @@ Three events fire on the HA event bus when zone topology changes (use `platform:
 | `unifi_play_zone_member_changed` | Member added or removed | `group_id`, `name`, `added_macs`, `removed_macs` |
 
 > `unifi_play_zone_created` fires for all existing zones on first connect. Add a condition if your automation should only run for genuinely new zones.
+>
+> `host_mac` may be empty in this event for a zone that has just been created, because the host is elected by the speakers rather than chosen when the zone is written. Don't rely on it being set; read it from the zone entity later if you need it.
 
 ## Troubleshooting
 

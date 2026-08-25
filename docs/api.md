@@ -744,18 +744,73 @@ Fanning writes out to every device (above) removes most of the divergence at
 source; the host preference remains as the tie-break for the window between a
 write and each device's resync, and for devices that were offline during it.
 
-##### The host is an internal role
+##### The host is an internal role - and it is elected, not assigned
 
-Exactly one entry in `dev_info` has `"host": true`. The host owns the zone: its
-group list is authoritative and `set_groups` is published to it. The Play app
-does **not** expose this - users just pick devices - so the integration does not
-surface it either.
+A settled zone has exactly one `dev_info` entry with `"host": true`. The host
+owns the zone: its group list is authoritative, it is the device that reports
+`hosting_group`, and `set_groups` is published to it. The Play app does **not**
+expose this - users just pick devices - so the integration does not surface it
+either.
+
+**Do not write a host when creating a zone - omit the key entirely.** The flag
+is the firmware's output, not the writer's input: the device elects a host
+after the write and echoes `"host": true` back on a later read.
+
+Writing `"host": true` in the creating `set_groups` produces a zone every
+device agrees on - correct membership on both, `dev_count` right - that only
+ever sounds on the host. The member stays silent, over AirPlay and over
+Spotify Connect alike, so it is not a streaming-protocol problem: the zone
+simply never carries audio to the member.
+
+Note that `"host": false` is **not** the fix. The app does not send the key at
+all. Captured 2026-08-25 from the Play app's own `set_groups` write, read off
+a device's MQTT broker (which echoes other clients' publishes on
+`UPL-MOB/+/action`):
+
+```json
+{"timestamp": 1787672000, "groups": [{
+  "group_index": 1, "dev_count": 2,
+  "group_id": "b9e728a2-70d1-4dd5-a52d-9f147f004da4",
+  "name": "Family Room + Kitchen",
+  "dev_info": [
+    {"type": "UPL-PORT", "mac": "1C0B8B3C79AA", "color": "black",
+     "ip": "192.168.2.112", "name": "Family Room"},
+    {"mac": "847848B2A521", "type": "UPL-PORT", "name": "Kitchen",
+     "color": "black", "ip": "192.168.2.25"}],
+  "broadcasting_mode": "zone_only"}]}
+```
+
+Four differences from what this integration used to send. Only the first two
+are acted on - the other two are recorded because they are what the app does,
+not because either is known to matter:
+
+| Field | App | This integration | Acted on? |
+|-------|-----|------------------|-----------|
+| `dev_info[].host` | absent | omitted | **yes** - writing it breaks member audio |
+| per-group `timestamp` | absent | omitted | **yes** - never echoed back, so write-only noise |
+| `wb_enable` / `wb_device` / `wb_input` | absent | still sent | no - "off" is an active command here, and whether an absent `wb_enable` means "off" or "leave unchanged" is unverified |
+| `group_index` | `1` | still defaults `0` | no - one sample, and it is a display-order field the user can set to `0` anyway |
+
+Also note what the device does **not** echo. `set_groups` accepts a per-group
+`timestamp`, but the `groups` event carries a timestamp only at the body's top
+level - never inside a group - so a per-group timestamp written by a client is
+dropped. Anything that tries to tell a fresh copy of a zone from a stale one by
+comparing per-group timestamps is comparing zeroes.
+
+A zone written this way reads back with `host_mac` empty until the firmware
+elects, then names the electing device. It never re-pushes a `groups` event in
+between, so a client that only listens keeps the hostless copy until it asks
+again.
 
 Removing the hosting device therefore has to hand the role over rather than
-refuse. Because each device's list is replace-all, that is two writes: give the
-zone to the new host (with `host` flipped in `dev_info`), then strip it from the
-old host's list. Both devices must be online, or the zone can end up owned by
-nobody or by two devices at once.
+refuse - but the successor is **not** named by the writer. Rewrite the zone
+without the removed device and without any `host` key, exactly as at creation,
+and let the survivors elect. Because publish_zones sends the complete list to
+every device, that is a single write. Both devices must be online, or the zone
+can end up owned by nobody.
+
+UNVERIFIED: re-election after the host is removed from a live zone has not been
+confirmed on hardware; only re-election at zone creation has.
 
 After the handoff the old host's device-level `hosting_group` field stays stale
 until it pushes a fresh `info` event. That field comes from the device's own
