@@ -472,5 +472,11 @@
       "input_not_on_device": "That input is not available on the device you selected. An Audio Port has eARC, Line In, S/PDIF and USB; a PowerAmp has eARC and Line In.",
       "zone_needs_two_devices": "A zone needs at least 2 devices. Delete the zone instead of removing this device."
     }
+  },
+  "issues": {
+    "mqtt_certificate_rejected": {
+      "title": "{name} is offline",
+      "description": "Home Assistant cannot talk to **{name}** ({ip}) over MQTT. The speaker rejected every client certificate this integration ships.\n\nFirmware 1.0.41 rotated the MQTT certificate authority, which previously left every entity unavailable with no device-level signal. This integration now tries each bundled generation on connect. If this repair is still open after a Home Assistant restart, the speaker is using a CA we do not have yet. Please open a GitHub issue with the speaker model and firmware version."
+    }
   }
 }

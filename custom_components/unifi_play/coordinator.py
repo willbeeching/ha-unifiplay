@@ -9,13 +9,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .api import UnifiPlayApi, UnifiPlayApiError
-from .const import EVENT_ZONE_CREATED, EVENT_ZONE_DELETED, EVENT_ZONE_MEMBER_CHANGED
+from .const import (
+    DOMAIN,
+    EVENT_ZONE_CREATED,
+    EVENT_ZONE_DELETED,
+    EVENT_ZONE_MEMBER_CHANGED,
+)
 from .discovery import async_resolve_direct
-from .mqtt_client import UnifiPlayMqttClient
+from .mqtt_client import MqttCertificateRejected, UnifiPlayMqttClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -403,6 +409,11 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         self.api = api
         self.manual_hosts = manual_hosts or []
         self._mqtt_clients: dict[str, UnifiPlayMqttClient] = {}
+        # Why MQTT is down, keyed by device_id. Cleared on a successful
+        # connect. The connectivity binary sensor stays available and
+        # reports this so a dead broker is "Disconnected", not a page of
+        # unavailable entities with no device-level signal (#20).
+        self._mqtt_offline_reason: dict[str, str] = {}
         self._device_states: dict[str, UnifiPlayDeviceState] = {}
         # Per-device group cache: device_id → {group_id: GroupState}.
         # The merged view in `groups` is rebuilt from this on every update so
@@ -484,6 +495,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             if existing.is_connected:
                 return
             _LOGGER.info("MQTT connection to %s dropped; reconnecting", ip)
+            self._mqtt_offline_reason.setdefault(device_id, "disconnected")
             try:
                 await existing.disconnect()
             except Exception:  # noqa: BLE001 - a dead client may fail any way
@@ -499,7 +511,13 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 self._handle_event, device_id, event_name, header, body
             )
 
-        client = UnifiPlayMqttClient(ip, mac, on_event=_schedule_event)
+        def _schedule_connection() -> None:
+            # paho callbacks run inside loop() on an executor thread.
+            self.hass.loop.call_soon_threadsafe(self._async_mqtt_connection_changed)
+
+        client = UnifiPlayMqttClient(
+            ip, mac, on_event=_schedule_event, on_connection=_schedule_connection
+        )
         self._mqtt_clients[device_id] = client
         try:
             await client.connect()
@@ -511,20 +529,79 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             client.request_sub_audio()
             client.request_features()
             client.request_groups()
+        except MqttCertificateRejected as err:
+            _LOGGER.warning("%s", err)
+            self._mqtt_offline_reason[device_id] = "certificate_rejected"
+            self._async_create_cert_issue(device_id, ip, mac)
+            await self._async_drop_failed_mqtt(client, device_id, ip)
         except Exception:
             state = self._device_states.get(device_id)
             platform = state.platform if state else "unknown"
             _LOGGER.exception(
                 "Failed to connect MQTT to %s (%s, %s), will retry", ip, mac, platform
             )
-            # Drop the half-built client so the next discovery poll retries.
-            # Leaving it in place would strand the device without state for as
-            # long as the config entry lives.
-            try:
-                await client.disconnect()
-            except Exception:  # noqa: BLE001
-                _LOGGER.debug("Cleanup of failed MQTT client for %s failed", ip)
-            self._mqtt_clients.pop(device_id, None)
+            self._mqtt_offline_reason[device_id] = "unreachable"
+            self._async_delete_cert_issue(mac)
+            await self._async_drop_failed_mqtt(client, device_id, ip)
+        else:
+            self._mqtt_offline_reason.pop(device_id, None)
+            self._async_delete_cert_issue(mac)
+            self.async_set_updated_data(self._device_states)
+
+    async def _async_drop_failed_mqtt(
+        self, client: UnifiPlayMqttClient, device_id: str, ip: str
+    ) -> None:
+        """Drop a half-built client so the next discovery poll retries.
+
+        Leaving it in place would strand the device without state for as
+        long as the config entry lives.
+        """
+        try:
+            await client.disconnect()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Cleanup of failed MQTT client for %s failed", ip)
+        self._mqtt_clients.pop(device_id, None)
+        self.async_set_updated_data(self._device_states)
+
+    @callback
+    def _async_mqtt_connection_changed(self) -> None:
+        """Refresh entities when a live MQTT session drops or returns."""
+        for device_id, client in self._mqtt_clients.items():
+            state = self._device_states.get(device_id)
+            if client.is_connected:
+                self._mqtt_offline_reason.pop(device_id, None)
+                if state is not None:
+                    self._async_delete_cert_issue(state.mac)
+            else:
+                self._mqtt_offline_reason.setdefault(device_id, "disconnected")
+        self.async_set_updated_data(self._device_states)
+
+    def mqtt_offline_reason(self, device_id: str) -> str | None:
+        """Why MQTT is down for this device, or None while it is connected."""
+        client = self._mqtt_clients.get(device_id)
+        if client is not None and client.is_connected:
+            return None
+        return self._mqtt_offline_reason.get(device_id)
+
+    def _cert_issue_id(self, mac: str) -> str:
+        return f"mqtt_certificate_rejected_{_norm_mac(mac)}"
+
+    def _async_create_cert_issue(self, device_id: str, ip: str, mac: str) -> None:
+        state = self._device_states.get(device_id)
+        name = (state.device_name or state.name) if state else mac
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            self._cert_issue_id(mac),
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="mqtt_certificate_rejected",
+            translation_placeholders={"name": name, "ip": ip},
+            learn_more_url="https://github.com/willbeeching/ha-unifiplay/issues/20",
+        )
+
+    def _async_delete_cert_issue(self, mac: str) -> None:
+        ir.async_delete_issue(self.hass, DOMAIN, self._cert_issue_id(mac))
 
     @callback
     def _handle_event(
@@ -844,8 +921,11 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
 
     async def async_shutdown(self) -> None:
         """Disconnect all MQTT clients."""
+        for state in self._device_states.values():
+            self._async_delete_cert_issue(state.mac)
         for client in self._mqtt_clients.values():
             await client.disconnect()
         self._mqtt_clients.clear()
+        self._mqtt_offline_reason.clear()
         if self.api is not None:
             await self.api.close()

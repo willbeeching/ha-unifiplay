@@ -4,6 +4,7 @@ __pycache__/
 dist/
 build/
 *.xapk
+*.xapk.zip
 *.apk
 .DS_Store
 *.log

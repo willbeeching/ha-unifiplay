@@ -45,6 +45,13 @@ jobs:
         run: |
           python scripts/check_mqtt_client_calls.py
 
+      # Control flow in connect(), not a missing method: the client-call
+      # guard cannot see it, and the failure shapes cannot be produced on
+      # demand against hardware.
+      - name: Check MQTT cert-generation fallback
+        run: |
+          python scripts/check_mqtt_cert_generations.py
+
   hacs:
     name: HACS Validation
     runs-on: ubuntu-latest
