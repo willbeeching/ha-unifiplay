@@ -286,6 +286,43 @@ Update device metadata (e.g. name). Body must include valid update fields.
 - **Keep-alive:** 60 seconds
 - **Clean session:** true
 
+#### The client certificate is rotated by firmware
+
+PowerAmp firmware `1.0.41` (~2026-08-23) changed the CA behind that mutual TLS,
+and devices that take it stop accepting the certificate the app shipped in
+2023. The official app was cut off the same way: UniFi Play 2.0.2's release
+notes read *"Requires PowerAmp 1.0.41 or newer."* Reported and diagnosed in
+[#20](https://github.com/willbeeching/ha-unifiplay/issues/20) against a
+`1.0.41` amp; the bundled-certificate figures below were confirmed locally
+with `openssl`.
+
+| | Bundled cert (2023) | Device CA after 1.0.41 |
+|---|---|---|
+| Issuer CN | `mqtt.unifi-play.ui.com`, **C=US** | `mqtt.unifi-play.ui.com`, **no C** |
+| Generated | 2023-09-25 | 2026-07-20 |
+| Serial | `0x6511549b` | `0x6a5dec49` |
+
+Same common name, different keypair — the old certificate is unexpired (valid
+to 2033) and structurally fine; the device simply no longer holds the CA that
+signed it. Connecting with no client certificate is still refused, so mutual
+TLS is not being dropped, only re-keyed.
+
+Two things make this hard to see, and both are worth knowing before debugging
+a "device is up but does nothing" report:
+
+- **TLS 1.3 hides the rejection.** The server defers client-certificate
+  verification until after the handshake, so the TCP connect and handshake
+  both succeed, `on_connect` never fires, and the refusal arrives as a bare
+  disconnect with no exception. Forcing TLS 1.2 surfaces the real alert:
+  `ssl.SSLError: [SSL: TLSV1_ALERT_UNKNOWN_CA]`. Absence of a CONNACK is
+  therefore the only reliable signal, which is why `connect()` waits for one.
+- **The certificate is not bound to the device.** The bundled cert's CN is a
+  MAC (`68D79A05B497`) belonging to no device any user of this integration
+  owns, and it authenticated against every device for two years. So the device
+  accepts anything chaining to its CA and does not pin identity — meaning one
+  certificate per CA generation is enough, and a certificate taken from a
+  newer app build should work on any device of that generation.
+
 ### Topics
 
 | Direction | Topic Pattern | QoS |

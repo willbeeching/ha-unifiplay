@@ -1,4 +1,15 @@
-"""MQTT client for direct communication with UniFi Play devices."""
+"""MQTT client for direct communication with UniFi Play devices.
+
+Devices authenticate the integration with mutual TLS, and the certificate
+authority behind that is not fixed for the life of the hardware: PowerAmp
+firmware 1.0.41 rotated it, and every device that took the update stopped
+accepting the client certificate this integration had used since 2023 (#20).
+The official mobile app was cut off in the same way and shipped a new
+certificate to match.
+
+So a single bundled certificate is not a safe assumption, and ``connect()``
+tries each generation in ``CERT_GENERATIONS`` until one is accepted.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +23,7 @@ import uuid
 import zlib
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import paho.mqtt.client as mqtt
 
@@ -30,6 +41,62 @@ _LOGGER = logging.getLogger(__name__)
 CERTS_DIR = Path(__file__).parent / "certs"
 CERT_FILE = CERTS_DIR / "mqtt_cert.crt"
 KEY_FILE = CERTS_DIR / "mqtt_cert_key.key"
+
+
+class CertGeneration(NamedTuple):
+    """One generation of Ubiquiti-issued MQTT client credentials."""
+
+    name: str
+    cert: Path
+    key: Path
+
+
+# Newest first: as firmware rolls out, most devices will want the newer
+# generation, and a device that wants the older one is remembered after its
+# first connection anyway.
+#
+# A generation whose files are absent is skipped, so adding support for a new
+# CA is a matter of dropping the pair into certs/ under the names listed here
+# - there is no code change to make. Only the 2023 pair ships today; the 2026
+# entry is the slot for the certificate that firmware 1.0.41 expects, which
+# this repository does not (yet) carry.
+CERT_GENERATIONS = (
+    CertGeneration(
+        "2026",
+        CERTS_DIR / "mqtt_cert_2026.crt",
+        CERTS_DIR / "mqtt_cert_2026_key.key",
+    ),
+    CertGeneration("2023", CERT_FILE, KEY_FILE),
+)
+
+# How long to wait for a CONNACK before deciding the device rejected us.
+#
+# The wait is what makes the rejection visible at all. Under TLS 1.3 the
+# server verifies the client certificate *after* the handshake completes, so
+# paho reports a successful connect and the refusal arrives as a bare
+# disconnect with no exception and no CONNACK. Only forcing TLS 1.2 turns it
+# into a legible "tlsv1 alert unknown ca" (#20). The device is on the LAN and
+# has already completed a handshake by this point, so a CONNACK is one round
+# trip away and this is generous.
+CONNACK_TIMEOUT = 5.0
+
+# Which generation each device accepted, keyed by MAC, so steady-state
+# reconnects do not re-probe. Module level because the coordinator builds a
+# fresh client for every reconnect, and keyed by MAC rather than IP because
+# the answer is a property of the device, not of where it currently is.
+#
+# A remembered choice is only an ordering hint: the other generations are
+# still tried if it stops working, which is exactly what a firmware update
+# does to it.
+_CERT_CHOICE: dict[str, str] = {}
+
+
+class MqttCertificateRejected(Exception):
+    """No bundled client certificate was accepted by the device."""
+
+
+class _ConnackTimeout(Exception):
+    """The device completed a TLS handshake and then never sent a CONNACK."""
 
 
 def encode_binme(header: dict, body: dict) -> bytes:
@@ -138,24 +205,87 @@ class UnifiPlayMqttClient:
         except Exception:
             _LOGGER.exception("Error parsing MQTT message from %s", self._device_ip)
 
-    def _setup_tls(self) -> None:
+    def _setup_tls(self, generation: CertGeneration) -> None:
         """Configure mTLS on the paho client.
 
         Runs in an executor because paho's ``tls_set`` performs blocking
         file I/O (reading the cert and key) and loads system trust stores.
+
+        ``cert_reqs=CERT_NONE`` is deliberate and unrelated to the client
+        credentials: the device presents a self-signed certificate, so the
+        verification that matters here runs the other way - the device
+        checking us.
         """
         if self._client is None:
             raise RuntimeError("_setup_tls called before MQTT client was instantiated")
         self._client.tls_set(
-            certfile=str(CERT_FILE),
-            keyfile=str(KEY_FILE),
+            certfile=str(generation.cert),
+            keyfile=str(generation.key),
             cert_reqs=ssl.CERT_NONE,
             tls_version=ssl.PROTOCOL_TLS_CLIENT,
         )
         self._client.tls_insecure_set(True)
 
+    def _generations_to_try(self) -> list[CertGeneration]:
+        """Bundled certificate generations, best candidate first."""
+        present = [
+            generation
+            for generation in CERT_GENERATIONS
+            if generation.cert.is_file() and generation.key.is_file()
+        ]
+        remembered = _CERT_CHOICE.get(self._device_mac)
+        if remembered:
+            # Stable sort, so the remembered generation moves to the front and
+            # the rest keep their newest-first order behind it.
+            present.sort(key=lambda generation: generation.name != remembered)
+        return present
+
     async def connect(self) -> None:
-        """Connect to the device's MQTT broker."""
+        """Connect to the device's MQTT broker.
+
+        Tries each bundled certificate generation in turn. Only a rejection
+        is worth retrying with different credentials - anything else (host
+        unreachable, connection refused, TCP timeout) means the device is not
+        answering at all, so it propagates immediately rather than dialling a
+        device that is plainly offline once per generation.
+        """
+        generations = self._generations_to_try()
+        if not generations:
+            raise MqttCertificateRejected(
+                "No MQTT client certificates are bundled with the integration"
+            )
+
+        for index, generation in enumerate(generations):
+            try:
+                await self._connect_with(generation)
+            except (ssl.SSLError, _ConnackTimeout) as err:
+                _LOGGER.debug(
+                    "%s rejected the %s client certificate: %s",
+                    self._device_ip,
+                    generation.name,
+                    err,
+                )
+                await self.disconnect()
+                if index == len(generations) - 1:
+                    raise MqttCertificateRejected(
+                        f"{self._device_ip} accepted none of the bundled client "
+                        f"certificates ({', '.join(g.name for g in generations)}). "
+                        "Devices on PowerAmp firmware 1.0.41 and later need a "
+                        "certificate this version does not carry - see issue #20"
+                    ) from err
+                continue
+
+            if _CERT_CHOICE.get(self._device_mac) != generation.name:
+                _LOGGER.info(
+                    "MQTT to %s authenticated with the %s client certificate",
+                    self._device_ip,
+                    generation.name,
+                )
+            _CERT_CHOICE[self._device_mac] = generation.name
+            return
+
+    async def _connect_with(self, generation: CertGeneration) -> None:
+        """Dial the device with one certificate generation and await CONNACK."""
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"ha-unifiplay-{self._client_uuid}",
@@ -165,12 +295,21 @@ class UnifiPlayMqttClient:
         self._client.on_message = self._on_message
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._setup_tls)
+        await loop.run_in_executor(None, self._setup_tls, generation)
 
         await loop.run_in_executor(
             None, self._client.connect, self._device_ip, MQTT_PORT, MQTT_KEEPALIVE
         )
+        # The loop has to be running before the wait: paho only processes the
+        # CONNACK from inside loop(), so _on_connect can never fire otherwise.
         self._loop_task = asyncio.create_task(self._mqtt_loop())
+        try:
+            await asyncio.wait_for(self._connected.wait(), CONNACK_TIMEOUT)
+        except TimeoutError as err:
+            # Raised as our own type so the caller can tell a refused
+            # certificate from a TCP-level timeout, which is also a
+            # TimeoutError and means something entirely different.
+            raise _ConnackTimeout(f"no CONNACK within {CONNACK_TIMEOUT}s") from err
 
     async def _mqtt_loop(self) -> None:
         """Run the paho loop in a non-blocking fashion."""
