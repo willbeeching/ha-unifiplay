@@ -279,9 +279,12 @@ Update device metadata (e.g. name). Body must include valid update fields.
 - **Host:** Device IP (e.g. `192.168.1.100`)
 - **Port:** `8883` (MQTT over TLS)
 - **TLS:** mTLS required — client certificate + key bundled in the UniFi Play app
-  - Certificate: `res/raw/mqtt_cert.crt` (issued by `mqtt.unifi-play.ui.com`)
-  - Private key: `res/raw/mqtt_cert_key.key` (RSA)
-  - Server cert verification: disabled (insecure trust manager)
+  - Pre-2.0.2 the pair lived in `res/raw/mqtt_cert.crt` + `mqtt_cert_key.key`
+  - 2.0.2 moved both generations into `libnative-lib.so` (AES-256-CTR); see below
+  - Issued by `mqtt.unifi-play.ui.com` (RSA)
+  - Server cert verification: this integration disables it (`CERT_NONE`). The
+    official app still skips it for the 2023 generation, and started verifying
+    the broker CA for the 2026 generation.
 - **Client ID:** Any unique string (e.g. `ha-unifiplay-{random}`)
 - **Keep-alive:** 60 seconds
 - **Clean session:** true
@@ -296,16 +299,46 @@ notes read *"Requires PowerAmp 1.0.41 or newer."* Reported and diagnosed in
 `1.0.41` amp; the bundled-certificate figures below were confirmed locally
 with `openssl`.
 
-| | Bundled cert (2023) | Device CA after 1.0.41 |
-|---|---|---|
-| Issuer CN | `mqtt.unifi-play.ui.com`, **C=US** | `mqtt.unifi-play.ui.com`, **no C** |
-| Generated | 2023-09-25 | 2026-07-20 |
-| Serial | `0x6511549b` | `0x6a5dec49` |
+| | Bundled client (2023) | Bundled client (2026) | Device cert after 1.0.41 |
+|---|---|---|---|
+| Issuer | `C=US, CN=mqtt.unifi-play.ui.com` | `C=US, CN=mqtt.unifi-play.ui.com` | `C=US, CN=mqtt.unifi-play.ui.com` |
+| Subject | `CN=68D79A05B497` | `CN=68D79A05B497` | `CN=mqtt.unifi-play.ui.com` (no C) |
+| Generated | 2023-09-25 09:36:27 | 2026-07-20 09:37:13 | 2026-07-20 09:37:13 |
+| Serial | `0x6511549b` | `0x6a5dec4a` | `0x6a5dec49` |
 
 Same common name, different keypair — the old certificate is unexpired (valid
 to 2033) and structurally fine; the device simply no longer holds the CA that
 signed it. Connecting with no client certificate is still refused, so mutual
 TLS is not being dropped, only re-keyed.
+
+The 2026 client pair is `certs/mqtt_cert_2026.crt` + `mqtt_cert_2026_key.key`,
+taken from UniFi Play **2.0.2** (`com.ui.unifi.play`). That build no longer
+ships the PEMs in `res/raw`. They sit in `libnative-lib.so` as
+`mqtt_cert2_crt` / `mqtt_cert2_key`, AES-256-CTR encrypted (tiny-AES-c),
+behind JNI `getNativeCrt2` / `getNativeKey2`. Decrypting them recovered
+valid PEM; the RSA moduli match; `openssl verify` against the app's own
+broker-CA bundle (`mqtt_broker_cert2_crt`) returns OK. The 2023 blobs in
+the same `.so` decrypt to the pair this repo has shipped since 2023, which
+is the check that the decrypt is the one the app uses.
+
+**Verified against hardware** on a PowerAmp `UPL-AMP` / `UPL-Amp-B`
+(`6C63F8AA2F29`, hostname Garage, firmware
+`UPL-AMP.qcs405.v1.0.41.aa8b53c.260803.07:20:10`):
+
+- 2026 generation: CONNACK in ~30 ms (TLS default and TLS 1.2). A subsequent
+  `info` request returned `deviceName=Garage` on
+  `UPL-AMP/6C63F8AA2F29/status`.
+- 2023 generation: no CONNACK under TLS 1.3 (`on_disconnect` with no
+  exception); TLS 1.2 raises `ssl.SSLError: [SSL: TLSV1_ALERT_UNKNOWN_CA]`.
+
+The device cert presented on 8883 is serial `0x6a5dec49`, issued the same
+second as the 2026 client cert (`0x6a5dec4a`). [#20](https://github.com/willbeeching/ha-unifiplay/issues/20)
+described that device cert as `CN=mqtt.unifi-play.ui.com` with **no C**;
+that is the **subject**. The issuer, measured here with `openssl` on the
+same firmware, is `C=US, CN=mqtt.unifi-play.ui.com`.
+
+Not verified: a pre-`1.0.41` device still connecting on the 2023 pair after
+this fallback is live. That is the other half of the rollout.
 
 Two things make this hard to see, and both are worth knowing before debugging
 a "device is up but does nothing" report:

@@ -67,3 +67,12 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      - id: mqtt-cert-generations
+        name: MQTT cert-generation fallback
+        # The #21 fallback cannot be caught by the client-call guard and the
+        # failure shapes that matter cannot be produced on demand on hardware.
+        entry: python3.13 scripts/check_mqtt_cert_generations.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

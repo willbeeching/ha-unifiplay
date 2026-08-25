@@ -17,6 +17,14 @@ from .coordinator import UnifiPlayCoordinator, UnifiPlayGroupState
 from .entity import UnifiPlayEntity, async_setup_platform_entities
 from .helpers import mac_normalise
 
+# Shown on the Connected sensor while MQTT is down. Machine keys live on
+# the coordinator; these are what a user sees in more-info.
+_MQTT_OFFLINE_REASONS = {
+    "certificate_rejected": "MQTT client certificate rejected",
+    "unreachable": "Speaker did not answer",
+    "disconnected": "Connection dropped",
+}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -28,6 +36,7 @@ async def async_setup_entry(
 
     def _factory(device_id: str) -> list[BinarySensorEntity]:
         return [
+            UnifiPlayConnectivitySensor(coordinator, device_id),
             UnifiPlayAdminLockSensor(coordinator, device_id),
             UnifiPlayAnnouncingSensor(coordinator, device_id),
             UnifiPlayInZoneSensor(coordinator, device_id),
@@ -65,6 +74,45 @@ async def async_setup_entry(
 
 
 # ── Per-physical-device binary sensors ───────────────────────────────────────
+
+
+class UnifiPlayConnectivitySensor(UnifiPlayEntity, BinarySensorEntity):
+    """On while MQTT to this speaker is up.
+
+    Every other entity becomes ``unavailable`` without a connection, which
+    is correct for their state but made the 1.0.41 certificate outage look
+    like a pile of broken entities rather than a device that was offline
+    (#20). This sensor stays available and reports ``off``, so the device
+    page has a single Connected/Disconnected signal.
+    """
+
+    _attr_name = "Connected"
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+
+    def __init__(
+        self,
+        coordinator: UnifiPlayCoordinator,
+        device_id: str,
+    ) -> None:
+        super().__init__(coordinator, device_id)
+        self._attr_unique_id = f"unifi_play_{self._device_state.mac}_connectivity"
+
+    @property
+    def available(self) -> bool:
+        # Deliberately not ``UnifiPlayEntity.available``: that requires a
+        # live MQTT session, which is the thing this entity exists to report.
+        return self._device_id in self.coordinator.data
+
+    @property
+    def is_on(self) -> bool:
+        return self._connected_mqtt() is not None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        reason = self.coordinator.mqtt_offline_reason(self._device_id)
+        if reason is None:
+            return {}
+        return {"reason": _MQTT_OFFLINE_REASONS.get(reason, reason)}
 
 
 class UnifiPlayAdminLockSensor(UnifiPlayEntity, BinarySensorEntity):

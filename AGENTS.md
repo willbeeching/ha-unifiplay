@@ -59,6 +59,7 @@ pip install pre-commit && pre-commit install   # once per clone
 pre-commit run --all-files --hook-stage pre-commit   # black, isort, json/yaml
 pre-commit run --all-files --hook-stage pre-push     # flake8, client-call check
 python scripts/check_mqtt_client_calls.py            # the guard on its own
+python scripts/check_mqtt_cert_generations.py        # cert-generation fallback, paho stubbed
 python scripts/dump_device.py <DEVICE_IP>            # dump a device's live state
 ```
 
@@ -70,8 +71,9 @@ so older interpreters cannot parse the package at all.
 Nothing is mocked and there are no unit tests. "Verified" here means one of:
 
 1. **Against hardware** — state a model and firmware version.
-2. **Statically** — `scripts/check_mqtt_client_calls.py`, or reasoning from a
-   captured payload in `docs/api.md`.
+2. **Statically** — `scripts/check_mqtt_client_calls.py`,
+   `scripts/check_mqtt_cert_generations.py`, or reasoning from a captured
+   payload in `docs/api.md`.
 
 Do not claim a change is tested because it lints. If you could not exercise
 something, say so plainly and say what would exercise it — the git history is

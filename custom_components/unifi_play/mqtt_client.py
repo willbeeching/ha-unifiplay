@@ -57,9 +57,8 @@ class CertGeneration(NamedTuple):
 #
 # A generation whose files are absent is skipped, so adding support for a new
 # CA is a matter of dropping the pair into certs/ under the names listed here
-# - there is no code change to make. Only the 2023 pair ships today; the 2026
-# entry is the slot for the certificate that firmware 1.0.41 expects, which
-# this repository does not (yet) carry.
+# - there is no code change to make. The 2026 pair is the certificate that
+# firmware 1.0.41 expects, extracted from UniFi Play 2.0.2; see docs/api.md.
 CERT_GENERATIONS = (
     CertGeneration(
         "2026",
@@ -97,6 +96,28 @@ class MqttCertificateRejected(Exception):
 
 class _ConnackTimeout(Exception):
     """The device completed a TLS handshake and then never sent a CONNACK."""
+
+
+class _ConnackRefused(Exception):
+    """The device sent a CONNACK whose reason code is not success."""
+
+
+def _connack_accepted(rc: Any) -> bool:
+    """True only when the CONNACK reason code means the broker accepted us.
+
+    ``_on_connect`` fires for every CONNACK, including failure codes such as
+    Not authorized. Treating arrival alone as acceptance would cache that
+    generation and skip the rest of CERT_GENERATIONS. paho v2 passes a
+    ``ReasonCode`` (``is_failure`` is true for values >= 0x80); v1 passed
+    an int. 0 is success either way.
+    """
+    is_failure = getattr(rc, "is_failure", None)
+    if isinstance(is_failure, bool):
+        return not is_failure
+    try:
+        return int(rc) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 def encode_binme(header: dict, body: dict) -> bytes:
@@ -151,15 +172,22 @@ class UnifiPlayMqttClient:
         device_ip: str,
         device_mac: str,
         on_event: Callable[[str, dict, dict], None] | None = None,
+        on_connection: Callable[[], None] | None = None,
     ) -> None:
         self._device_ip = device_ip
         self._device_mac = device_mac.upper().replace(":", "")
         self._on_event = on_event
+        self._on_connection = on_connection
         self._client_uuid = uuid.uuid4().hex[:12]
         self._pub_topic = f"{TOPIC_MOBILE}/{self._client_uuid}/action"
         self._client: mqtt.Client | None = None
         self._loop_task: asyncio.Task | None = None
         self._connected = asyncio.Event()
+        # Set on any CONNACK so a failure code can wake ``_connect_with``
+        # without being mistaken for acceptance. ``_connected`` is only set
+        # when the reason code is success.
+        self._connack_done = asyncio.Event()
+        self._connack_rc: Any = None
 
     @property
     def is_connected(self) -> bool:
@@ -173,12 +201,22 @@ class UnifiPlayMqttClient:
         rc: Any,
         properties: Any = None,
     ) -> None:
-        _LOGGER.debug("MQTT connected to %s: %s", self._device_ip, rc)
+        _LOGGER.debug("MQTT CONNACK from %s: %s", self._device_ip, rc)
+        self._connack_rc = rc
+        if not _connack_accepted(rc):
+            # A failure CONNACK is a rejection, not a connection. Setting
+            # ``_connected`` here would cache this generation and skip the
+            # rest of CERT_GENERATIONS.
+            self._connack_done.set()
+            return
         # Wildcard on the platform segment: PowerAmps publish under UPL-AMP,
         # other hardware under its own prefix (UPL-DEVICE, UPL-PORT, ...), and
         # the broker is the device itself so this matches only its own topics.
         client.subscribe(f"+/{self._device_mac}/status")
         self._connected.set()
+        self._connack_done.set()
+        if self._on_connection:
+            self._on_connection()
 
     def _on_disconnect(
         self,
@@ -190,6 +228,8 @@ class UnifiPlayMqttClient:
     ) -> None:
         _LOGGER.debug("MQTT disconnected from %s: %s", self._device_ip, rc)
         self._connected.clear()
+        if self._on_connection:
+            self._on_connection()
 
     def _on_message(
         self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage
@@ -258,20 +298,26 @@ class UnifiPlayMqttClient:
         for index, generation in enumerate(generations):
             try:
                 await self._connect_with(generation)
-            except (ssl.SSLError, _ConnackTimeout) as err:
+            except (ssl.SSLError, _ConnackTimeout, _ConnackRefused) as err:
                 _LOGGER.debug(
                     "%s rejected the %s client certificate: %s",
                     self._device_ip,
                     generation.name,
                     err,
                 )
-                await self.disconnect()
+                try:
+                    await self.disconnect()
+                except Exception:  # noqa: BLE001 - a half-open client can fail any way
+                    _LOGGER.debug(
+                        "Cleanup after rejected %s certificate for %s failed",
+                        generation.name,
+                        self._device_ip,
+                    )
                 if index == len(generations) - 1:
                     raise MqttCertificateRejected(
                         f"{self._device_ip} accepted none of the bundled client "
                         f"certificates ({', '.join(g.name for g in generations)}). "
-                        "Devices on PowerAmp firmware 1.0.41 and later need a "
-                        "certificate this version does not carry - see issue #20"
+                        "See issue #20"
                     ) from err
                 continue
 
@@ -295,6 +341,10 @@ class UnifiPlayMqttClient:
         self._client.on_message = self._on_message
 
         loop = asyncio.get_running_loop()
+        self._connected.clear()
+        self._connack_done.clear()
+        self._connack_rc = None
+
         await loop.run_in_executor(None, self._setup_tls, generation)
 
         await loop.run_in_executor(
@@ -304,12 +354,14 @@ class UnifiPlayMqttClient:
         # CONNACK from inside loop(), so _on_connect can never fire otherwise.
         self._loop_task = asyncio.create_task(self._mqtt_loop())
         try:
-            await asyncio.wait_for(self._connected.wait(), CONNACK_TIMEOUT)
+            await asyncio.wait_for(self._connack_done.wait(), CONNACK_TIMEOUT)
         except TimeoutError as err:
             # Raised as our own type so the caller can tell a refused
             # certificate from a TCP-level timeout, which is also a
             # TimeoutError and means something entirely different.
             raise _ConnackTimeout(f"no CONNACK within {CONNACK_TIMEOUT}s") from err
+        if not self._connected.is_set():
+            raise _ConnackRefused(f"CONNACK {self._connack_rc}")
 
     async def _mqtt_loop(self) -> None:
         """Run the paho loop in a non-blocking fashion."""
@@ -713,3 +765,5 @@ class UnifiPlayMqttClient:
             self._client.disconnect()
             self._client = None
         self._connected.clear()
+        self._connack_done.clear()
+        self._connack_rc = None
