@@ -155,7 +155,11 @@ def _load_mqtt_client() -> types.ModuleType:
     pkg = types.ModuleType("custom_components.unifi_play")
     pkg.__path__ = [str(PACKAGE)]
     sys.modules["custom_components.unifi_play"] = pkg
-    _load_module("custom_components.unifi_play.const", PACKAGE / "const.py", "custom_components.unifi_play")
+    _load_module(
+        "custom_components.unifi_play.const",
+        PACKAGE / "const.py",
+        "custom_components.unifi_play",
+    )
     return _load_module(
         "custom_components.unifi_play.mqtt_client",
         PACKAGE / "mqtt_client.py",
