@@ -76,3 +76,13 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      - id: set-groups-payload
+        name: set_groups payload has no firmware-owned keys
+        # A zone written with "host" set forms correctly on every device but
+        # never carries audio to the members - silent in one room, loud
+        # nowhere. Static because the failure needs two speakers to observe.
+        entry: python3.13 scripts/check_set_groups_payload.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

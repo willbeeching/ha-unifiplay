@@ -420,7 +420,11 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                             errors["base"] = "device_in_other_zone"
 
                     if not errors:
-                        dev_info = [dev_info_entry(host_state, host=True)]
+                        # No host is designated at creation - the firmware
+                        # elects one and writes the flag back. Naming a host
+                        # here leaves the member silent; see create_zone in
+                        # services.py and docs/api.md.
+                        dev_info = [dev_info_entry(host_state)]
                         for mid in member_ids:
                             try:
                                 m_coord, m_internal = resolve_device(self.hass, mid)

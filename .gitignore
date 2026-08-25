@@ -9,3 +9,6 @@ build/
 .DS_Store
 *.log
 .env
+
+# Local scratch: patched copy for live testing + protocol capture tooling
+DEPLOY/

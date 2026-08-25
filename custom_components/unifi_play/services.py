@@ -323,7 +323,18 @@ def async_register_services(hass: HomeAssistant) -> None:
                 f"'{member_mac_to_zone[host_mac]}'. Remove it from that zone first."
             )
 
-        dev_info = [dev_info_entry(host_state, host=True)]
+        # Create the zone with no host designated - the "host" key is OMITTED
+        # entirely, not set false (see dev_info_entry: the app never sends it,
+        # and "host": false does not work either). The firmware elects.
+        # The firmware elects its own host and writes the flag back: a zone
+        # created in the Play app is reported with a fully populated dev_info
+        # and no host at creation, and only names one on a later read
+        # (observed on five UPL-PORTs, fw 1.1.10). Pre-designating a host is
+        # the one thing an app-made zone never does, and the symptom of doing
+        # it is a zone every device agrees on that only ever sounds on the
+        # host - the member registers membership and stays silent, over
+        # AirPlay and Spotify Connect alike. See docs/api.md.
+        dev_info = [dev_info_entry(host_state)]
         for member_device_id in call.data["member_device_ids"]:
             m_coordinator, m_dev_id = resolve_device(hass, member_device_id)
             m_state = (m_coordinator.data or {}).get(m_dev_id)
@@ -335,7 +346,7 @@ def async_register_services(hass: HomeAssistant) -> None:
                     f"'{m_state.name}' is already in zone '{any_mac_to_zone[m_mac]}'. "
                     "A device can only be in one zone at a time — remove it first."
                 )
-            dev_info.append(dev_info_entry(m_state, host=False))
+            dev_info.append(dev_info_entry(m_state))
 
         host_coordinator.update_zone(
             group_id=str(uuid.uuid4()),
