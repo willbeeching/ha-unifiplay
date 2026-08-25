@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -116,7 +115,9 @@ def gs_to_dict(gs: UnifiPlayGroupState) -> dict[str, Any]:
         "wb_enable": gs.wb_enable,
         "wb_device": gs.wb_device,
         "wb_input": gs.wb_input,
-        "timestamp": int(time.time()),
+        # No per-group timestamp, for the same reason group_payload() dropped
+        # it (#22): set_groups accepts one, the groups event never echoes it
+        # back inside a group, so it is write-only noise here too.
     }
 
 
