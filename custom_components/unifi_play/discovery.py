@@ -32,7 +32,14 @@ from typing import Any
 import paho.mqtt.client as mqtt
 
 from .const import MQTT_PORT, TOPIC_MOBILE
-from .mqtt_client import CERT_FILE, KEY_FILE, decode_binme, encode_binme
+from .mqtt_client import (
+    CONNACK_TIMEOUT,
+    CertGeneration,
+    bundled_generations,
+    connack_accepted,
+    decode_binme,
+    encode_binme,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -168,16 +175,62 @@ def _probe_mqtt_sync(ip: str, timeout: float) -> dict[str, Any] | None:
     ``<platform>/<MAC>/status`` message, so a wildcard subscription
     identifies the device without knowing anything but its IP. Needed for
     UPL-PORT hardware, which does not answer the UDP discovery probe.
+
+    Tries each bundled certificate generation, for the same reason
+    UnifiPlayMqttClient.connect does: the CA is firmware-owned and rotates
+    per platform. This probe carrying only the 2023 pair is what made an
+    Audio Port on firmware 1.1.12 or later impossible to set up at all - it
+    failed here, during discovery, before any device existed for the
+    coordinator fallback to help (#24).
+    """
+    for generation in bundled_generations():
+        result, rejected = _probe_mqtt_once(ip, timeout, generation)
+        if not rejected:
+            # Accepted, or a failure no other certificate can fix.
+            return result
+        _LOGGER.debug(
+            "MQTT probe of %s rejected the %s client certificate",
+            ip,
+            generation.name,
+        )
+    _LOGGER.debug(
+        "MQTT probe of %s: none of the bundled client certificates were "
+        "accepted. A device on newer firmware may need one this version does "
+        "not carry - see issue #20",
+        ip,
+    )
+    return None
+
+
+def _probe_mqtt_once(
+    ip: str, timeout: float, generation: CertGeneration
+) -> tuple[dict[str, Any] | None, bool]:
+    """One probe attempt. Returns (device, certificate_was_rejected).
+
+    The flag is True only when trying another generation could help. An
+    unreachable device, or one that accepts the certificate and then reports
+    nothing, both return False: no certificate fixes either, and retrying
+    would multiply the setup timeout by the number of generations bundled.
     """
     found: dict[str, Any] = {"ip": ip}
     got_status = threading.Event()
     got_info = threading.Event()
+    # Set on any CONNACK; accepted only when its reason code says so. Under
+    # TLS 1.3 a refused certificate arrives as no CONNACK at all, so waiting
+    # on this is the only way to tell "wrong certificate" from "device says
+    # nothing" - connect() and the handshake both succeed either way (#20).
+    connacked = threading.Event()
+    accepted: dict[str, bool] = {"ok": False}
     client_uuid = uuid.uuid4().hex[:12]
     action_topic = f"{TOPIC_MOBILE}/{client_uuid}/action"
 
     def on_connect(
         client: mqtt.Client, userdata: Any, flags: Any, rc: Any, properties: Any = None
     ) -> None:
+        accepted["ok"] = connack_accepted(rc)
+        connacked.set()
+        if not accepted["ok"]:
+            return
         client.subscribe("#")
 
     def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
@@ -220,19 +273,28 @@ def _probe_mqtt_sync(ip: str, timeout: float) -> dict[str, Any] | None:
     client.on_connect = on_connect
     client.on_message = on_message
     client.tls_set(
-        certfile=str(CERT_FILE),
-        keyfile=str(KEY_FILE),
+        certfile=str(generation.cert),
+        keyfile=str(generation.key),
         cert_reqs=ssl.CERT_NONE,
         tls_version=ssl.PROTOCOL_TLS_CLIENT,
     )
     client.tls_insecure_set(True)
     try:
         client.connect(ip, MQTT_PORT, 15)
+    except ssl.SSLError as err:
+        # TLS 1.2 surfaces a refused certificate here as an unknown-ca alert;
+        # under TLS 1.3 it is invisible until the CONNACK never arrives.
+        _LOGGER.debug("MQTT probe TLS to %s failed: %s", ip, err)
+        return None, True
     except OSError as err:
+        # Unreachable, refused, or timed out: not a certificate problem.
         _LOGGER.debug("MQTT probe could not connect to %s: %s", ip, err)
-        return None
+        return None, False
     client.loop_start()
     try:
+        connacked.wait(CONNACK_TIMEOUT)
+        if not accepted["ok"]:
+            return None, True
         got_status.wait(timeout)
         if got_status.is_set():
             got_info.wait(_MQTT_INFO_TIMEOUT)
@@ -244,7 +306,7 @@ def _probe_mqtt_sync(ip: str, timeout: float) -> dict[str, Any] | None:
         _LOGGER.debug(
             "MQTT probe connected to %s but saw no retained UPL status topic", ip
         )
-        return None
+        return None, False
     _LOGGER.debug(
         "MQTT probe identified %s: %s (%s)",
         ip,
@@ -258,7 +320,7 @@ def _probe_mqtt_sync(ip: str, timeout: float) -> dict[str, Any] | None:
         "platform": found["platform"],
         "firmware": "",
         "ip": ip,
-    }
+    }, False
 
 
 async def async_probe_mqtt(

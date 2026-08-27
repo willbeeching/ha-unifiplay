@@ -60,6 +60,13 @@ jobs:
         run: |
           python scripts/check_set_groups_payload.py
 
+      # The cert-generation fallback shipped in mqtt_client only; discovery
+      # built its own paho client with the 2023 pair hardcoded, so an Audio
+      # Port on rotated firmware could not be set up at all (#24).
+      - name: Check cert-generation call sites
+        run: |
+          python scripts/check_cert_generation_users.py
+
   hacs:
     name: HACS Validation
     runs-on: ubuntu-latest

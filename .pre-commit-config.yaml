@@ -76,6 +76,15 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      - id: cert-generation-users
+        name: every tls_set uses the bundled cert generations
+        # A hardcoded pair cannot reach a device whose CA has rotated, and
+        # under TLS 1.3 the rejection is silent (#24).
+        entry: python3.13 scripts/check_cert_generation_users.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       - id: set-groups-payload
         name: set_groups payload has no firmware-owned keys
         # A zone written with "host" set forms correctly on every device but
