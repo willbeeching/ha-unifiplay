@@ -291,6 +291,26 @@ Update device metadata (e.g. name). Body must include valid update fields.
 
 #### The client certificate is rotated by firmware
 
+The rotation is **per platform, on its own firmware schedule**. UniFi Play 2.0.2
+carries two separate thresholds, `FW_VERSION_MQTT_CERT2_LAST_LEGACY_AMP` and
+`FW_VERSION_MQTT_CERT2_LAST_LEGACY_PORT`, so an amp and a Port cross it at
+different versions:
+
+| Platform | Last legacy firmware | First needing the 2026 cert | Basis |
+|---|---|---|---|
+| `UPL-AMP` | 1.0.40 | **1.0.41** | measured - amps broke on exactly 1.0.41 (#20) |
+| `UPL-PORT` | 1.1.11 | **1.1.12** | inferred - 1.1.10 observed working, 1.1.13 reported broken (#24) |
+
+The Port row is an inference, not a measurement: `1.0.40` and `1.1.11` are both
+present in the app's string pool and the two constants above exist, but the
+constant-to-value binding was not read out of the bytecode. The endpoints are
+firm - a Port on 1.1.10 worked and one on 1.1.13 did not.
+
+**Anything that opens an MQTT session must offer both generations**, not just
+the control client. Discovery having its own hardcoded pair meant a Port on
+1.1.12+ could not be added at all: it failed during identification, before a
+device existed for the coordinator's fallback to help (#24).
+
 PowerAmp firmware `1.0.41` (~2026-08-23) changed the CA behind that mutual TLS,
 and devices that take it stop accepting the certificate the app shipped in
 2023. The official app was cut off the same way: UniFi Play 2.0.2's release

@@ -102,7 +102,7 @@ class _ConnackRefused(Exception):
     """The device sent a CONNACK whose reason code is not success."""
 
 
-def _connack_accepted(rc: Any) -> bool:
+def connack_accepted(rc: Any) -> bool:
     """True only when the CONNACK reason code means the broker accepted us.
 
     ``_on_connect`` fires for every CONNACK, including failure codes such as
@@ -118,6 +118,20 @@ def _connack_accepted(rc: Any) -> bool:
         return int(rc) == 0
     except (TypeError, ValueError):
         return False
+
+
+def bundled_generations() -> list[CertGeneration]:
+    """Certificate generations whose files are actually present, newest first.
+
+    Shared with discovery.py: the identification probe builds its own paho
+    client and must offer the same credentials, or a device on firmware whose
+    CA has rotated cannot be discovered at all (#24).
+    """
+    return [
+        generation
+        for generation in CERT_GENERATIONS
+        if generation.cert.is_file() and generation.key.is_file()
+    ]
 
 
 def encode_binme(header: dict, body: dict) -> bytes:
@@ -203,7 +217,7 @@ class UnifiPlayMqttClient:
     ) -> None:
         _LOGGER.debug("MQTT CONNACK from %s: %s", self._device_ip, rc)
         self._connack_rc = rc
-        if not _connack_accepted(rc):
+        if not connack_accepted(rc):
             # A failure CONNACK is a rejection, not a connection. Setting
             # ``_connected`` here would cache this generation and skip the
             # rest of CERT_GENERATIONS.
@@ -268,11 +282,7 @@ class UnifiPlayMqttClient:
 
     def _generations_to_try(self) -> list[CertGeneration]:
         """Bundled certificate generations, best candidate first."""
-        present = [
-            generation
-            for generation in CERT_GENERATIONS
-            if generation.cert.is_file() and generation.key.is_file()
-        ]
+        present = bundled_generations()
         remembered = _CERT_CHOICE.get(self._device_mac)
         if remembered:
             # Stable sort, so the remembered generation moves to the front and
