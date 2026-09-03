@@ -249,10 +249,16 @@ class UnifiPlayMqttClient:
         # other hardware under its own prefix (UPL-DEVICE, UPL-PORT, ...), and
         # the broker is the device itself so this matches only its own topics.
         client.subscribe(f"+/{self._device_mac}/status")
-        self._signal(self._connected, set_it=True)
-        self._signal(self._connack_done, set_it=True)
+        # Notify BEFORE waking connect(). Both hops land on the event loop -
+        # the listener through its own call_soon_threadsafe, the events
+        # through _signal - so whichever is queued first runs first. Waking
+        # connect() first leaves a window where the caller has resumed and
+        # started publishing while nothing has yet been told the connection
+        # came up, which is a real ordering hazard and not only a flaky test.
         if self._on_connection:
             self._on_connection()
+        self._signal(self._connected, set_it=True)
+        self._signal(self._connack_done, set_it=True)
 
     def _on_disconnect(
         self,

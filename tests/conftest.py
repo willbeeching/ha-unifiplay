@@ -317,11 +317,12 @@ class ApolloServer:
         self._mocker.get(self.devices_url, exc=TimeoutError())
 
     def connection_error(self) -> None:
+        """DNS, TCP or TLS failure - the console is not there at all."""
         import aiohttp
 
         self._mocker.get(
             self.devices_url,
-            exc=aiohttp.ClientConnectorError(None, OSError("unreachable")),  # type: ignore[arg-type]
+            exc=aiohttp.ClientConnectionError("Cannot connect to host"),
         )
 
 

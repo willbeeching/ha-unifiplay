@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -17,6 +18,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import selector
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import (
     UnifiPlayApi,
@@ -24,6 +26,7 @@ from .api import (
     UnifiPlayAuthError,
     UnifiPlayForbiddenError,
     UnifiPlayServiceUnavailableError,
+    UnifiPlayTransientError,
     UnifiPlayUnsupportedApiError,
 )
 from .const import (
@@ -64,6 +67,10 @@ STEP_DIRECT_DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_MANUAL_HOSTS, default=""): str,
     }
 )
+
+# Reauth asks for the credential only: the host identifies the entry, and a
+# different host is a different console.
+STEP_REAUTH_DATA_SCHEMA = vol.Schema({vol.Required(CONF_API_KEY): str})
 
 
 def _is_ui_cloud_host(host: str) -> bool:
@@ -142,6 +149,65 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
             menu_options=[MODE_CONSOLE, MODE_DIRECT],
         )
 
+    async def _async_validate_console(
+        self, host: str, api_key: str
+    ) -> tuple[str, list[dict[str, Any]], dict[str, str]]:
+        """Probe a console. Returns (normalised host, devices, errors).
+
+        Shared by the setup step and the reauth step so the two cannot answer
+        the same failure differently - a reauth that reported "cannot connect"
+        where setup said "invalid API key" would send the user looking at
+        their network instead of their credential.
+
+        Uses Home Assistant's shared aiohttp session, so there is nothing to
+        close on any path out of here, including the ones that raise.
+        """
+        errors: dict[str, str] = {}
+        api = UnifiPlayApi(
+            host, api_key, async_get_clientsession(self.hass, verify_ssl=False)
+        )
+        normalized_host = api.host
+        devices: list[dict[str, Any]] = []
+
+        if _is_ui_cloud_host(normalized_host):
+            return normalized_host, devices, {"base": "cloud_host"}
+
+        try:
+            # An empty device list is not a setup failure: the API answered,
+            # so host and key are good. api.validate_connection logs a warning
+            # and the entry is created anyway, so adding the integration
+            # before adopting hardware still works.
+            devices = await api.validate_connection()
+        except UnifiPlayAuthError:
+            errors["base"] = "invalid_auth"
+        except UnifiPlayForbiddenError:
+            errors["base"] = "forbidden"
+        except UnifiPlayServiceUnavailableError:
+            errors["base"] = "apollo_unavailable"
+        except UnifiPlayUnsupportedApiError:
+            errors["base"] = "unsupported_api"
+        except UnifiPlayTransientError:
+            errors["base"] = "console_busy"
+        except UnifiPlayApiError as err:
+            # Deliberately not %s of the exception at warning level with the
+            # host: the message can carry a response body. The host is safe
+            # and is what the user needs to check.
+            _LOGGER.warning(
+                "UniFi Play setup failed for controller %s: %s. "
+                "Enable debug logging for this integration and retry to "
+                "capture request details in the Home Assistant logs.",
+                normalized_host,
+                type(err).__name__,
+            )
+            errors["base"] = "cannot_connect"
+        except Exception:
+            _LOGGER.exception(
+                "Unexpected error during UniFi Play setup for controller %s",
+                normalized_host,
+            )
+            errors["base"] = "unknown"
+        return normalized_host, devices, errors
+
     async def async_step_console(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -149,57 +215,12 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            host = user_input[CONF_CONTROLLER_HOST]
-            api_key = user_input[CONF_API_KEY]
-
-            api = UnifiPlayApi(host, api_key)
-            normalized_host = api.host
-
-            if _is_ui_cloud_host(normalized_host):
-                await api.close()
-                return self.async_show_form(
-                    step_id="console",
-                    data_schema=STEP_CONSOLE_DATA_SCHEMA,
-                    errors={"base": "cloud_host"},
-                )
-
-            await self.async_set_unique_id(normalized_host)
-            self._abort_if_unique_id_configured()
-
-            devices: list[dict[str, Any]] = []
-            try:
-                # An empty device list is not a setup failure: the API
-                # answered, so host and key are good. api.validate_connection
-                # logs a warning and we create the entry anyway, so adding the
-                # integration before adopting hardware still works.
-                devices = await api.validate_connection()
-            except UnifiPlayAuthError:
-                errors["base"] = "invalid_auth"
-            except UnifiPlayForbiddenError:
-                errors["base"] = "forbidden"
-            except UnifiPlayServiceUnavailableError:
-                errors["base"] = "apollo_unavailable"
-            except UnifiPlayUnsupportedApiError:
-                errors["base"] = "unsupported_api"
-            except UnifiPlayApiError as err:
-                _LOGGER.warning(
-                    "UniFi Play setup failed for controller %s: %s. "
-                    "Enable debug logging for this integration and retry to "
-                    "capture request details in the Home Assistant logs.",
-                    normalized_host,
-                    err,
-                )
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception(
-                    "Unexpected error during UniFi Play setup for controller %s",
-                    normalized_host,
-                )
-                errors["base"] = "unknown"
-            finally:
-                await api.close()
-
+            normalized_host, devices, errors = await self._async_validate_console(
+                user_input[CONF_CONTROLLER_HOST], user_input[CONF_API_KEY]
+            )
             if not errors:
+                await self.async_set_unique_id(normalized_host)
+                self._abort_if_unique_id_configured()
                 if existing := _entry_already_covering(self.hass, devices):
                     return self.async_abort(
                         reason="already_configured_device",
@@ -210,13 +231,52 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_MODE: MODE_CONSOLE,
                         CONF_CONTROLLER_HOST: normalized_host,
-                        CONF_API_KEY: api_key,
+                        CONF_API_KEY: user_input[CONF_API_KEY],
                     },
                 )
 
         return self.async_show_form(
             step_id="console",
             data_schema=STEP_CONSOLE_DATA_SCHEMA,
+            errors=errors,
+        )
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """A console entry's API key stopped being accepted.
+
+        Reached when the coordinator raises ConfigEntryAuthFailed, which
+        happens on a 401 or a 403: the key has been revoked, rotated, or the
+        console it was made on has been rebuilt. Only console entries have a
+        credential, so only they can land here.
+        """
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Take a replacement API key for an existing console entry."""
+        errors: dict[str, str] = {}
+        entry = self._get_reauth_entry()
+
+        if user_input is not None:
+            # The host is not asked for again: a new host is a different
+            # console and a different entry. Reconfigure changes the host.
+            host = entry.data[CONF_CONTROLLER_HOST]
+            _normalized, _devices, errors = await self._async_validate_console(
+                host, user_input[CONF_API_KEY]
+            )
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={CONF_API_KEY: user_input[CONF_API_KEY]},
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=STEP_REAUTH_DATA_SCHEMA,
+            description_placeholders={"host": entry.data.get(CONF_CONTROLLER_HOST, "")},
             errors=errors,
         )
 

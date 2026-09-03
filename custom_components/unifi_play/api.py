@@ -12,6 +12,17 @@ _LOGGER = logging.getLogger(__name__)
 API_PATH = "/proxy/apollo/api/v1"
 NETWORK_PATH = "/proxy/network/api/s/default"
 
+#: Per-request budget for the console.
+#:
+#: The console is on the LAN and Apollo answers /devices in tens of
+#: milliseconds. Without a timeout aiohttp waits forever, which turns a
+#: console that accepts a connection and then stops answering - a UniFi OS
+#: mid-upgrade does exactly that - into a coordinator refresh that never
+#: returns and an integration that never sets up. The connect budget is
+#: shorter than the total because a LAN host that has not completed a TCP
+#: handshake in five seconds is not going to.
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5)
+
 
 def _normalize_host(host: str) -> str:
     """Return a bare hostname or IP suitable for URL construction."""
@@ -78,8 +89,25 @@ class UnifiPlayConnectionError(UnifiPlayApiError):
     """The controller could not be reached at all (DNS, TCP, TLS, timeout)."""
 
 
+class UnifiPlayTransientError(UnifiPlayApiError):
+    """The console answered, but with something that should be retried.
+
+    HTTP 429 (rate limited) and any 5xx. These say nothing about whether the
+    configuration is right, so they must not be reported to the user as a
+    credential or setup problem, and must not be allowed to discard device
+    state the integration already holds: MQTT remains the source of truth for
+    everything except which devices exist.
+    """
+
+
 def _status_error(status: int, url: str) -> UnifiPlayApiError:
-    """Return the specific error for an HTTP status worth diagnosing."""
+    """Map an HTTP status to the error that says what to do about it.
+
+    Every non-2xx status maps to something. A status this function did not
+    anticipate is still a refusal, and returning None for it - or falling
+    through to a JSON parse - is how a proxy's 502 error page once looked
+    like "the console has no devices".
+    """
     if status == 401:
         return UnifiPlayAuthError(
             "Apollo rejected the API key (HTTP 401). The Apollo application is "
@@ -90,10 +118,17 @@ def _status_error(status: int, url: str) -> UnifiPlayApiError:
             "Controller refused the API key (HTTP 403). Check the key was "
             "created on this console and has not been revoked."
         )
-    return UnifiPlayUnsupportedApiError(
-        f"Apollo has no handler for {url} (HTTP 404). The application is "
-        "installed but does not expose the expected API path."
-    )
+    if status == 404:
+        return UnifiPlayUnsupportedApiError(
+            f"Apollo has no handler for {url} (HTTP 404). The application is "
+            "installed but does not expose the expected API path."
+        )
+    if status == 429 or status >= 500:
+        return UnifiPlayTransientError(
+            f"Console is not answering properly right now (HTTP {status}). "
+            "This is usually temporary."
+        )
+    return UnifiPlayApiError(f"Console refused the request (HTTP {status})")
 
 
 class UnifiPlayApi:
@@ -103,12 +138,18 @@ class UnifiPlayApi:
         self,
         host: str,
         api_key: str,
-        session: aiohttp.ClientSession | None = None,
+        session: aiohttp.ClientSession,
     ) -> None:
+        """Take Home Assistant's shared session; never build one.
+
+        A session this integration created was a session this integration had
+        to remember to close, on every path including the ones that raise -
+        and the config flow had several that did not. Home Assistant owns the
+        lifetime of the shared session, so there is nothing left to leak.
+        """
         self._host = _normalize_host(host)
         self._api_key = api_key
         self._session = session
-        self._owns_session = session is None
 
     @property
     def host(self) -> str:
@@ -123,20 +164,13 @@ class UnifiPlayApi:
     def _headers(self) -> dict[str, str]:
         return {"X-API-KEY": self._api_key, "Accept": "application/json"}
 
-    async def _ensure_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            connector = aiohttp.TCPConnector(ssl=False)
-            self._session = aiohttp.ClientSession(connector=connector)
-            self._owns_session = True
-        return self._session
-
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        session = await self._ensure_session()
+        session = self._session
         url = f"{self._base_url}{path}"
         _LOGGER.debug("%s %s", method, url)
         try:
             async with session.request(
-                method, url, headers=self._headers, **kwargs
+                method, url, headers=self._headers, timeout=REQUEST_TIMEOUT, **kwargs
             ) as resp:
                 if resp.content_type == "text/html":
                     # No Apollo application on this console: UniFi OS has no
@@ -156,18 +190,31 @@ class UnifiPlayApi:
                         "It is installed automatically when a UniFi Play "
                         "device is discovered by the console."
                     )
-                if resp.status in (401, 403, 404):
-                    # These statuses each point at a distinct, fixable cause,
-                    # so log the body and raise a specific error rather than
-                    # collapsing them into a generic connection failure.
-                    text = await resp.text()
-                    _LOGGER.debug(
-                        "HTTP %s from %s: content_type=%s body=%s",
-                        resp.status,
-                        url,
-                        resp.content_type,
-                        text[:500],
-                    )
+                if resp.status >= 400:
+                    # Every non-2xx raises. The three worth diagnosing are
+                    # 401/403/404; everything else still has to fail rather
+                    # than fall through to a JSON parse, or a proxy's own
+                    # error page becomes "the console has no devices".
+                    #
+                    # The body is logged only when it can help: a 404 body
+                    # distinguishes Apollo's own plain-text 404 from a proxy's,
+                    # while a 401 or 403 body is a credential response and
+                    # some products echo the presented key back in it.
+                    if resp.status in (401, 403):
+                        _LOGGER.debug(
+                            "HTTP %s from %s (body withheld: credential response)",
+                            resp.status,
+                            url,
+                        )
+                    else:
+                        text = await resp.text()
+                        _LOGGER.debug(
+                            "HTTP %s from %s: content_type=%s body=%s",
+                            resp.status,
+                            url,
+                            resp.content_type,
+                            text[:500],
+                        )
                     raise _status_error(resp.status, url)
                 if resp.content_type != "application/json":
                     text = await resp.text()
@@ -181,13 +228,28 @@ class UnifiPlayApi:
                     raise UnifiPlayApiError(
                         f"Unexpected response ({resp.status}): {text[:200]}"
                     )
-                data: dict[str, Any] = await resp.json()
+                try:
+                    data: dict[str, Any] = await resp.json()
+                except ValueError as err:
+                    # Declared application/json and was not. Distinct from the
+                    # HTML catch-all above, which is a console with no Apollo.
+                    _LOGGER.debug("Malformed JSON from %s: %s", url, err)
+                    raise UnifiPlayApiError(
+                        f"Console returned malformed JSON ({resp.status})"
+                    ) from err
         except (aiohttp.ClientError, TimeoutError) as err:
             _LOGGER.debug("Connection error for %s: %s", url, err)
             raise UnifiPlayConnectionError(f"Connection error: {err}") from err
 
+        if not isinstance(data, dict):
+            raise UnifiPlayApiError("Console returned JSON that is not an object")
         if data.get("err"):
-            msg = data["err"].get("msg", "Unknown error")
+            err_body = data["err"]
+            msg = (
+                err_body.get("msg", "Unknown error")
+                if isinstance(err_body, dict)
+                else str(err_body)
+            )
             raise UnifiPlayApiError(msg)
         return data
 
@@ -200,7 +262,20 @@ class UnifiPlayApi:
         by MAC address.
         """
         data = await self._request("GET", "/devices")
-        devices = data.get("data") or []
+        payload = data.get("data")
+        # `data: null` is the documented empty answer (it is what /groups
+        # returns with no groups). Anything that is neither a list nor null
+        # is a shape nobody has seen, and reading it as "no devices" would
+        # drop every speaker already known - the exact failure that made a
+        # console hiccup look like the hardware disappearing.
+        if payload is None:
+            devices: list[dict[str, Any]] = []
+        elif isinstance(payload, list):
+            devices = payload
+        else:
+            raise UnifiPlayApiError(
+                f"Apollo /devices returned {type(payload).__name__}, expected a list"
+            )
 
         missing_ip = [d for d in devices if not d.get("ip") and d.get("mac")]
         if missing_ip:
@@ -217,16 +292,28 @@ class UnifiPlayApi:
         return devices
 
     async def get_groups(self) -> list[dict[str, Any]]:
-        """Return a list of speaker groups."""
+        """Return a list of speaker groups.
+
+        Apollo answers ``data: null`` rather than ``[]`` when no groups
+        exist, so this cannot null-guard by truthiness alone.
+        """
         data = await self._request("GET", "/groups")
-        return data.get("data") or []
+        payload = data.get("data")
+        if payload is None:
+            return []
+        if not isinstance(payload, list):
+            raise UnifiPlayApiError(
+                f"Apollo /groups returned {type(payload).__name__}, expected a list"
+            )
+        return payload
 
     async def _get_client_ip_map(self) -> dict[str, str]:
         """Return a mapping of MAC (lowercase, no separators) to IP from the Network API."""
-        session = await self._ensure_session()
         url = f"https://{self._host}{NETWORK_PATH}/stat/sta"
         try:
-            async with session.get(url, headers=self._headers) as resp:
+            async with self._session.get(
+                url, headers=self._headers, timeout=REQUEST_TIMEOUT
+            ) as resp:
                 if resp.status != 200:
                     raise UnifiPlayApiError(f"Network API status {resp.status}")
                 data: dict[str, Any] = await resp.json(content_type=None)
@@ -288,8 +375,3 @@ class UnifiPlayApi:
                     self._host,
                 )
             return devices
-
-    async def close(self) -> None:
-        """Close the session if we own it."""
-        if self._owns_session and self._session and not self._session.closed:
-            await self._session.close()

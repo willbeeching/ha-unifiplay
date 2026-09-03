@@ -23,6 +23,13 @@
         "data": {
           "manual_hosts": "Device IP addresses (optional)"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-enter your UniFi Play API key",
+        "description": "The console at {host} is no longer accepting the stored API key. This usually means the key was revoked or rotated, or the console was rebuilt. Create a new key under Settings → Control Plane → API Keys on that console and paste it whole.\n\nTo point Home Assistant at a different console, remove this entry and add a new one — a different console is a different set of speakers.",
+        "data": {
+          "api_key": "API Key"
+        }
       }
     },
     "error": {
@@ -35,11 +42,13 @@
       "no_devices_found": "No UniFi Play devices answered on Home Assistant's subnet. If your speakers are on a different VLAN or subnet, enter their IP addresses in the field above. Otherwise check they are powered on and reachable from Home Assistant.",
       "no_response": "The addresses you entered answered neither the discovery probe (UDP 10001) nor an MQTT connection (TCP 8883). Check each IP is correct and that no firewall rule blocks those ports between Home Assistant and the speakers.",
       "discovery_failed": "Could not open a discovery socket. Check the Home Assistant logs for details.",
-      "unknown": "Unexpected error. Check the Home Assistant logs for details."
+      "unknown": "Unexpected error. Check the Home Assistant logs for details.",
+      "console_busy": "The console answered, but with a rate-limit or server error rather than data. That is usually temporary — a console mid-upgrade or under load. Wait a moment and try again."
     },
     "abort": {
       "already_configured": "This controller is already configured.",
-      "already_configured_device": "Those speakers are already set up by \"{entry}\". A UniFi Play device can only belong to one entry: a second one covering the same hardware creates no entities at all, because every entity ID it would use is already taken. Remove the existing entry first if you want to set them up a different way."
+      "already_configured_device": "Those speakers are already set up by \"{entry}\". A UniFi Play device can only belong to one entry: a second one covering the same hardware creates no entities at all, because every entity ID it would use is already taken. Remove the existing entry first if you want to set them up a different way.",
+      "reauth_successful": "The new API key was accepted and UniFi Play has reloaded."
     }
   },
   "services": {

@@ -9,12 +9,18 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .api import UnifiPlayApi, UnifiPlayApiError
+from .api import (
+    UnifiPlayApi,
+    UnifiPlayApiError,
+    UnifiPlayAuthError,
+    UnifiPlayForbiddenError,
+)
 from .const import (
     DOMAIN,
     EVENT_ZONE_CREATED,
@@ -450,7 +456,17 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         if self.api is not None:
             try:
                 devices = await self.api.get_devices()
+            except (UnifiPlayAuthError, UnifiPlayForbiddenError) as err:
+                # A key that was accepted at setup and is now refused has been
+                # revoked or rotated. Home Assistant turns this into a repair
+                # notification with a Reconfigure button, which is the only
+                # action that fixes it; UpdateFailed would retry the same dead
+                # key every five minutes forever and say nothing useful.
+                raise ConfigEntryAuthFailed(str(err)) from err
             except UnifiPlayApiError as err:
+                # Everything else keeps the devices already known. MQTT is the
+                # source of truth for state; this poll only discovers devices,
+                # so a console outage must not empty the integration.
                 raise UpdateFailed(f"Error fetching devices: {err}") from err
         else:
             # Manual hosts already tracked as devices are excluded from the
@@ -971,5 +987,5 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             await client.disconnect()
         self._mqtt_clients.clear()
         self._mqtt_offline_reason.clear()
-        if self.api is not None:
-            await self.api.close()
+        # Nothing to close: the API client borrows Home Assistant's shared
+        # session, which Home Assistant closes on shutdown.
