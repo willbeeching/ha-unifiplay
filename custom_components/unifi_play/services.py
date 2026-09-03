@@ -21,7 +21,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
 from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
-from .helpers import resolve_device
+from .helpers import loaded_coordinators, resolve_device
 from .mqtt_client import UnifiPlayMqttClient
 
 ATTR_DEVICE_ID = "device_id"
@@ -30,6 +30,10 @@ ATTR_DEVICE_ID = "device_id"
 _ServiceHandler = Callable[[ServiceCall], Coroutine[Any, Any, None]]
 
 # Kept in step with services.yaml and the services block in strings.json.
+#
+# Registered once per Home Assistant run in async_setup, never removed: an
+# action is a property of the integration, not of an entry, and one that
+# disappears when a speaker is unloaded breaks any automation calling it.
 SERVICE_NAMES = (
     "play_announcement",
     "stop_announcement",
@@ -193,7 +197,7 @@ def _resolve_zone(
             translation_placeholders={"entity_id": entity_id},
         )
     group_id = uid[len("unifi_play_zone_") :]
-    for coordinator in hass.data.get(DOMAIN, {}).values():
+    for coordinator in loaded_coordinators(hass):
         if group_id in coordinator.groups:
             return coordinator, group_id
     raise ServiceValidationError(
@@ -449,9 +453,3 @@ def async_register_services(hass: HomeAssistant) -> None:
     ]
     for name, handler, schema in handlers:
         hass.services.async_register(DOMAIN, name, handler, schema=schema)
-
-
-def async_unregister_services(hass: HomeAssistant) -> None:
-    """Remove the integration's services when the last entry unloads."""
-    for name in SERVICE_NAMES:
-        hass.services.async_remove(DOMAIN, name)

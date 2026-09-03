@@ -30,6 +30,21 @@
         "data": {
           "api_key": "API Key"
         }
+      },
+      "reconfigure_console": {
+        "title": "Change console address",
+        "description": "Point this entry at a different UniFi OS Console — a console rebuilt on a new address, or a DHCP reservation that changed. Enter the IP or hostname without https://.\n\nLeave the API key blank to keep the one already stored. If the console has stopped accepting that key, Home Assistant will ask for a new one on its own.\n\nThis keeps every entity, dashboard card and automation you already have; removing and re-adding the integration does not.",
+        "data": {
+          "controller_host": "Controller Host",
+          "api_key": "API Key (optional)"
+        }
+      },
+      "reconfigure_direct": {
+        "title": "Change device addresses",
+        "description": "Home Assistant finds Play devices on its own subnet automatically, so this list is only for speakers it cannot broadcast to: ones on another VLAN or subnet, and Audio Ports, which do not answer the discovery probe at all and can only be reached by being named here.\n\nSeparate addresses with commas. The list is checked before it is saved — a list that reaches nothing is not accepted, because saving it would disconnect every speaker on the next reload.",
+        "data": {
+          "manual_hosts": "Device IP addresses"
+        }
       }
     },
     "error": {
@@ -48,7 +63,9 @@
     "abort": {
       "already_configured": "This controller is already configured.",
       "already_configured_device": "Those speakers are already set up by \"{entry}\". A UniFi Play device can only belong to one entry: a second one covering the same hardware creates no entities at all, because every entity ID it would use is already taken. Remove the existing entry first if you want to set them up a different way.",
-      "reauth_successful": "The new API key was accepted and UniFi Play has reloaded."
+      "reauth_successful": "The new API key was accepted and UniFi Play has reloaded.",
+      "reconfigure_successful": "Saved. UniFi Play has reloaded with the new settings.",
+      "already_configured_console": "Another UniFi Play entry is already set up for that console. Two entries covering the same speakers create no entities at all, because every entity ID the second one would use is already taken."
     }
   },
   "services": {
@@ -562,6 +579,9 @@
     },
     "filename_traversal": {
       "message": "That announcement filename is not allowed: it points outside the speaker's own clip storage."
+    },
+    "invalid_hex_colour": {
+      "message": "{value} is not a six-digit hex colour, for example FF8800."
     }
   }
 }

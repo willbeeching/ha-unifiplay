@@ -15,6 +15,20 @@ from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState, UnifiPlayGr
 _LOGGER = logging.getLogger(__name__)
 
 
+def loaded_coordinators(hass: HomeAssistant) -> list[UnifiPlayCoordinator]:
+    """Every coordinator currently loaded, across every config entry.
+
+    Two entries can reach the same hardware - a console one and a direct one
+    - so anything resolving a device or a zone has to look across all of
+    them. ``async_loaded_entries`` filters to entries that actually set up,
+    which is the right bias: an entry that failed has no coordinator and is
+    not claiming anything.
+    """
+    return [
+        entry.runtime_data for entry in hass.config_entries.async_loaded_entries(DOMAIN)
+    ]
+
+
 def mac_normalise(mac: str) -> str:
     """Return a MAC address as uppercase hex without delimiters."""
     return mac.upper().replace(":", "")
@@ -51,7 +65,7 @@ def resolve_device(
     # A registered client is not necessarily a connected one either: the
     # coordinator adds it before dialling out (#14).
     fallback: tuple[UnifiPlayCoordinator, str] | None = None
-    for coordinator in hass.data.get(DOMAIN, {}).values():
+    for coordinator in loaded_coordinators(hass):
         for dev_id, state in (coordinator.data or {}).items():
             if mac_normalise(state.mac) not in norm_macs:
                 continue

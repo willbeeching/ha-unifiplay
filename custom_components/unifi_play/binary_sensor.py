@@ -6,14 +6,13 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, broadcast_input_label
-from .coordinator import UnifiPlayCoordinator, UnifiPlayGroupState
+from .coordinator import UnifiPlayConfigEntry, UnifiPlayCoordinator, UnifiPlayGroupState
 from .entity import UnifiPlayEntity, async_setup_platform_entities
 from .helpers import mac_normalise
 
@@ -26,13 +25,20 @@ _MQTT_OFFLINE_REASONS = {
 }
 
 
+# Every command is a fire-and-forget MQTT publish to a device on the LAN:
+# nothing here blocks, nothing rate-limits, and the coordinator's own poll is
+# the only thing that fetches. Serialising would only add latency to a
+# "turn everything down" script.
+PARALLEL_UPDATES = 0
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: UnifiPlayConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up UniFi Play binary sensor entities."""
-    coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
 
     def _factory(device_id: str) -> list[BinarySensorEntity]:
         return [
@@ -52,12 +58,15 @@ async def async_setup_entry(
     def _sync_zone_sensors() -> None:
         active = set(coordinator.groups)
 
-        # Drop tracking entries for zones that no longer exist.
-        # The actual entities are cleaned up when _sync_zones removes the zone
-        # device from the device registry (all entities on the device go with it).
-        for gid in list(known_zone_sensors):
-            if gid not in active:
-                known_zone_sensors.pop(gid)
+        # Drop tracking entries for zones that no longer exist. The entities
+        # themselves go when _sync_zones removes the zone device (everything
+        # on a device goes with it), and this is gated on the same condition
+        # for the same reason: before every speaker has reported, an absent
+        # zone means "not heard from yet", not "deleted".
+        if coordinator.zones_fully_synced:
+            for gid in list(known_zone_sensors):
+                if gid not in active:
+                    known_zone_sensors.pop(gid)
 
         new_ids = [gid for gid in active if gid not in known_zone_sensors]
         if not new_ids:

@@ -67,6 +67,16 @@ STEP_DIRECT_DATA_SCHEMA = vol.Schema(
 # different host is a different console.
 STEP_REAUTH_DATA_SCHEMA = vol.Schema({vol.Required(CONF_API_KEY): str})
 
+# Reconfigure is the other way round: the address can move, and the key is
+# optional because a console that has been re-addressed usually still has the
+# same one. Leaving it blank keeps the stored credential.
+STEP_RECONFIGURE_CONSOLE_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_CONTROLLER_HOST): str,
+        vol.Optional(CONF_API_KEY): str,
+    }
+)
+
 
 def _is_ui_cloud_host(host: str) -> bool:
     """Return True for Ubiquiti cloud hosts such as api.ui.com.
@@ -115,13 +125,13 @@ def _entry_already_covering(
     macs = {mac_normalise(d.get("mac", "")) for d in devices if d.get("mac")}
     if not macs:
         return None
-    for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
+    for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+        coordinator = entry.runtime_data
         covered = {
             mac_normalise(state.mac) for state in coordinator.data.values() if state.mac
         }
         if covered & macs:
-            entry = hass.config_entries.async_get_entry(entry_id)
-            return entry.title if entry else "another UniFi Play entry"
+            return entry.title
     return None
 
 
@@ -236,6 +246,117 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change where an existing entry looks, without losing its entities.
+
+        A console entry can move to a different address - a console rebuilt
+        on a new IP, or a DHCP reservation that changed - and a direct entry
+        can gain or lose manually listed hosts. Removing and re-adding does
+        the same thing at the cost of every entity ID, every dashboard card
+        and every automation, because the entry is what owns them.
+
+        The credential is *not* changed here: a rejected key has its own flow
+        (reauth), which Home Assistant starts on its own when the console
+        stops accepting it.
+        """
+        entry = self._get_reconfigure_entry()
+        if entry.data.get(CONF_MODE, MODE_CONSOLE) == MODE_DIRECT:
+            return await self.async_step_reconfigure_direct()
+        return await self.async_step_reconfigure_console()
+
+    async def async_step_reconfigure_console(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Point a console entry at a different console address."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            host = user_input[CONF_CONTROLLER_HOST]
+            api_key = user_input.get(CONF_API_KEY) or entry.data[CONF_API_KEY]
+            normalized_host, _devices, errors = await self._async_validate_console(
+                host, api_key
+            )
+            if not errors:
+                # The unique ID is the console address, so moving the entry
+                # moves its identity with it. What must not happen is two
+                # entries landing on one console: their speakers overlap, and
+                # every entity ID the second would mint is already taken.
+                if any(
+                    other.unique_id == normalized_host
+                    and other.entry_id != entry.entry_id
+                    for other in self._async_current_entries()
+                ):
+                    return self.async_abort(reason="already_configured_console")
+                return self.async_update_reload_and_abort(
+                    entry,
+                    unique_id=normalized_host,
+                    title=f"UniFi Play ({normalized_host})",
+                    data_updates={
+                        CONF_MODE: MODE_CONSOLE,
+                        CONF_CONTROLLER_HOST: normalized_host,
+                        CONF_API_KEY: api_key,
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure_console",
+            data_schema=self.add_suggested_values_to_schema(
+                STEP_RECONFIGURE_CONSOLE_SCHEMA,
+                {CONF_CONTROLLER_HOST: entry.data.get(CONF_CONTROLLER_HOST, "")},
+            ),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure_direct(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change the manually listed hosts on a direct entry.
+
+        Speakers on Home Assistant's own subnet are found by broadcast and
+        need no entry here; this list is for the ones on another VLAN, and
+        for Audio Port hardware, which does not answer the UDP probe at all
+        (#5) and can only be reached by being named.
+        """
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            manual_hosts = _parse_manual_hosts(user_input.get(CONF_MANUAL_HOSTS, ""))
+            try:
+                found = await async_resolve_direct(manual_hosts=manual_hosts)
+            except OSError:
+                _LOGGER.exception("UniFi Play direct discovery failed")
+                found = []
+                errors["base"] = "discovery_failed"
+
+            if not errors:
+                if not found:
+                    # Saving a list that reaches nothing would silently
+                    # disconnect every speaker on the next reload.
+                    errors["base"] = (
+                        "no_response" if manual_hosts else "no_devices_found"
+                    )
+                else:
+                    return self.async_update_reload_and_abort(
+                        entry, data_updates={CONF_MANUAL_HOSTS: manual_hosts}
+                    )
+
+        return self.async_show_form(
+            step_id="reconfigure_direct",
+            data_schema=self.add_suggested_values_to_schema(
+                STEP_DIRECT_DATA_SCHEMA,
+                {
+                    CONF_MANUAL_HOSTS: ", ".join(
+                        entry.data.get(CONF_MANUAL_HOSTS, []) or []
+                    )
+                },
+            ),
+            errors=errors,
+        )
+
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
@@ -342,9 +463,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
 
     @property
     def _coordinator(self) -> UnifiPlayCoordinator:
-        coordinator: UnifiPlayCoordinator = self.hass.data[DOMAIN][
-            self.config_entry.entry_id
-        ]
+        coordinator: UnifiPlayCoordinator = self.config_entry.runtime_data
         return coordinator
 
     # ── Running a mutation ───────────────────────────────────────────────────

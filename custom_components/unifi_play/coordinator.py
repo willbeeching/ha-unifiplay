@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import issue_registry as ir
@@ -35,6 +36,12 @@ from .mqtt_client import MqttCertificateRejected, UnifiPlayMqttClient
 from .zone_writer import ZoneWriter
 
 _LOGGER = logging.getLogger(__name__)
+
+#: A config entry whose ``runtime_data`` is this integration's coordinator.
+#:
+#: Declared here rather than in ``__init__`` so every module can annotate an
+#: entry without importing the package root, which imports every platform.
+type UnifiPlayConfigEntry = ConfigEntry[UnifiPlayCoordinator]
 
 
 def _norm_mac(mac: str) -> str:
@@ -453,12 +460,14 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
     def __init__(
         self,
         hass: HomeAssistant,
+        config_entry: ConfigEntry,
         api: UnifiPlayApi | None,
         manual_hosts: list[str] | None = None,
     ) -> None:
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=config_entry,
             name="UniFi Play",
             update_interval=DISCOVERY_INTERVAL,
         )
@@ -480,6 +489,9 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # can suppress zone_created events that fire for every pre-existing
         # zone on first MQTT connect (startup / reload).
         self._device_groups_initialized: set[str] = set()
+        # Devices whose address changed on the last discovery pass, so the
+        # existing client is dialled at somewhere nothing is listening.
+        self._address_changed: set[str] = set()
         # Zones currently reported differently by different speakers. Held so
         # the disagreement is logged once on the way in and once on the way
         # out, rather than on every event for as long as it lasts.
@@ -539,7 +551,18 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 )
             else:
                 state = self._device_states[dev_id]
-                if dev.get("ip"):
+                if dev.get("ip") and dev["ip"] != state.ip:
+                    # A speaker that moved has to be redialled: the existing
+                    # client still believes it is connected to an address
+                    # nothing is listening on any more, so nothing about the
+                    # connection state says anything is wrong.
+                    _LOGGER.info(
+                        "%s moved from %s to %s; reconnecting",
+                        state.device_name or state.name,
+                        state.ip or "an unknown address",
+                        dev["ip"],
+                    )
+                    self._address_changed.add(dev_id)
                     state.ip = dev["ip"]
                 if dev.get("firmware"):
                     state.firmware = dev["firmware"]
@@ -565,12 +588,16 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         speakers, but whatever takes the console away usually takes the
         speakers with it, and only the console comes back on its own.
         """
+        moved = device_id in self._address_changed
         existing = self._mqtt_clients.get(device_id)
         if existing is not None:
-            if existing.is_connected:
+            if existing.is_connected and not moved:
                 return
-            _LOGGER.info("MQTT connection to %s dropped; reconnecting", ip)
-            self._mqtt_offline_reason.setdefault(device_id, "disconnected")
+            if moved:
+                self._address_changed.discard(device_id)
+            else:
+                _LOGGER.info("MQTT connection to %s dropped; reconnecting", ip)
+                self._mqtt_offline_reason.setdefault(device_id, "disconnected")
             try:
                 await existing.disconnect()
             except Exception:  # noqa: BLE001 - a dead client may fail any way
@@ -931,6 +958,25 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         later with nothing in the log.
         """
         return self._zone_writer
+
+    @property
+    def zones_fully_synced(self) -> bool:
+        """True once every known speaker has reported its zone list.
+
+        Until then ``groups`` is a partial view - after a restart it starts
+        empty and fills as each speaker connects - so anything that treats an
+        absent zone as a deleted zone has to wait. Removing a zone entity
+        because the speaker hosting it has not connected yet destroys its
+        registry row, and with it every dashboard card and automation
+        pointing at that zone.
+
+        A speaker that is offline never reports, so this stays False while
+        anything is unreachable. That is the safe bias: it costs a stale zone
+        entity until the speaker returns, and the alternative costs the
+        user's configuration.
+        """
+        known = set(self._device_states)
+        return bool(known) and known <= self._device_groups_initialized
 
     def device_zone_cache(self) -> dict[str, dict[str, UnifiPlayGroupState]]:
         """Each device's own last-reported zone list, keyed by device id.

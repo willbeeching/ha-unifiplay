@@ -97,15 +97,29 @@ async def test_unload_disconnects_everything(
     setup_direct: MockConfigEntry,
     mqtt_network: FakeMqttNetwork,
 ) -> None:
-    """Unloading leaves no live MQTT client and no services behind."""
-    assert hass.services.has_service(DOMAIN, "play_announcement")
-
+    """Unloading leaves no live MQTT client behind."""
     assert await hass.config_entries.async_unload(setup_direct.entry_id)
     await hass.async_block_till_done()
 
     assert setup_direct.state is ConfigEntryState.NOT_LOADED
     assert mqtt_network.live_clients() == []
-    assert not hass.services.has_service(DOMAIN, "play_announcement")
+
+
+async def test_actions_survive_an_unload(
+    hass: HomeAssistant, setup_direct: MockConfigEntry
+) -> None:
+    """Actions belong to the integration, not to an entry.
+
+    They are registered in async_setup for the whole run: removing them with
+    one entry would break a second entry still loaded, and an automation
+    written against one would break on every reload.
+    """
+    assert hass.services.has_service(DOMAIN, "play_announcement")
+
+    assert await hass.config_entries.async_unload(setup_direct.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.services.has_service(DOMAIN, "play_announcement")
 
 
 async def test_reload_does_not_leak_clients(

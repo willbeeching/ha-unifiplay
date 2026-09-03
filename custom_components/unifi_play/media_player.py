@@ -15,7 +15,6 @@ from homeassistant.components.media_player import (
     MediaPlayerState,
     MediaType,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr
@@ -36,6 +35,7 @@ from .const import (
     source_value,
 )
 from .coordinator import (
+    UnifiPlayConfigEntry,
     UnifiPlayCoordinator,
     UnifiPlayDeviceState,
     UnifiPlayGroupState,
@@ -60,13 +60,20 @@ SUPPORTED_FEATURES = (
 SOURCE_STREAMING = "streaming"
 
 
+# Every command is a fire-and-forget MQTT publish to a device on the LAN:
+# nothing here blocks, nothing rate-limits, and the coordinator's own poll is
+# the only thing that fetches. Serialising would only add latency to a
+# "turn everything down" script.
+PARALLEL_UPDATES = 0
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: UnifiPlayConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up UniFi Play media players from a config entry."""
-    coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
 
     def _device_factory(device_id: str) -> list[UnifiPlayMediaPlayer]:
         return [UnifiPlayMediaPlayer(coordinator, device_id)]
@@ -108,10 +115,26 @@ async def async_setup_entry(
                     zone_device_ids[ident_value[len("zone_") :]] = dev_entry.id
                     break
 
-        # Purge entity registrations for zones no longer reported by any device.
-        # This covers both cross-session orphans (created last run, deleted
-        # while HA was offline) and zones removed in the current session.
-        for reg_entry in er.async_entries_for_config_entry(entity_reg, entry.entry_id):
+        # Purging is gated on every known speaker having reported its zones.
+        #
+        # After a restart the canonical view starts empty and fills as each
+        # speaker connects, so an ungated purge deletes every zone entity and
+        # its device on the way through - taking the registry rows with them,
+        # and with those every dashboard card and automation pointing at that
+        # zone. A speaker that is offline never reports, so this stays
+        # blocked while anything is unreachable: the cost is a stale zone
+        # entity until it returns, against destroying the user's
+        # configuration.
+        purge = coordinator.zones_fully_synced
+
+        # Entity registrations for zones no longer reported by any speaker.
+        # Covers both cross-session orphans (created last run, deleted while
+        # Home Assistant was off) and zones removed in this session.
+        for reg_entry in (
+            er.async_entries_for_config_entry(entity_reg, entry.entry_id)
+            if purge
+            else []
+        ):
             uid = reg_entry.unique_id or ""
             if not uid.startswith("unifi_play_zone_"):
                 continue
@@ -134,10 +157,11 @@ async def async_setup_entry(
         # MCP) while HA was running, leaving the device record behind with no
         # entity to trigger the entity-registry path above.
         _LOGGER.debug(
-            "_sync_zones: scanning %d device entries for orphaned zones",
+            "_sync_zones: %d device entries, purge=%s",
             len(entry_devices),
+            purge,
         )
-        for zone_gid, device_id in zone_device_ids.items():
+        for zone_gid, device_id in (zone_device_ids.items() if purge else ()):
             if zone_gid in active:
                 continue
             if device_reg.async_get(device_id) is None:

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.device_registry import DeviceEntry
+from homeassistant.helpers.typing import ConfigType
 
 from .api import UnifiPlayApi
 from .const import (
@@ -19,8 +20,9 @@ from .const import (
     MODE_CONSOLE,
     MODE_DIRECT,
 )
-from .coordinator import UnifiPlayCoordinator
-from .services import async_register_services, async_unregister_services
+from .coordinator import UnifiPlayConfigEntry, UnifiPlayCoordinator
+from .helpers import mac_normalise
+from .services import async_register_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,7 +37,19 @@ PLATFORMS = [
     Platform.TEXT,
 ]
 
-type UnifiPlayConfigEntry = ConfigEntry
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the integration's actions, once per Home Assistant run.
+
+    Not per config entry: an action is a property of the integration, and
+    registering them in ``async_setup_entry`` meant a second entry re-ran the
+    registration and unloading the first removed actions the second still
+    needed. They are registered whether or not any entry loads, so an
+    automation referencing one is a validation error naming the action rather
+    than an "unknown service" that appears and disappears with a speaker.
+    """
+    async_register_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: UnifiPlayConfigEntry) -> bool:
@@ -48,33 +62,90 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPlayConfigEntry) ->
 
     if mode == MODE_DIRECT:
         coordinator = UnifiPlayCoordinator(
-            hass, api=None, manual_hosts=entry.data.get(CONF_MANUAL_HOSTS, [])
+            hass,
+            entry,
+            api=None,
+            manual_hosts=list(entry.data.get(CONF_MANUAL_HOSTS, [])),
         )
     else:
+        # verify_ssl=False because a UniFi OS console presents a certificate
+        # signed by Ubiquiti's own CA for a hostname the user is not
+        # connecting by. Home Assistant still owns this session's lifetime:
+        # it caches one per verify_ssl setting and closes them on shutdown.
         session = async_get_clientsession(hass, verify_ssl=False)
         api = UnifiPlayApi(
             host=entry.data[CONF_CONTROLLER_HOST],
             api_key=entry.data[CONF_API_KEY],
             session=session,
         )
-        coordinator = UnifiPlayCoordinator(hass, api)
+        coordinator = UnifiPlayCoordinator(hass, entry, api)
+
+    # Raises ConfigEntryNotReady on a transient failure and
+    # ConfigEntryAuthFailed on a revoked key; the coordinator draws that
+    # distinction so a dead credential prompts for a new one instead of
+    # being retried every five minutes forever.
     await coordinator.async_config_entry_first_refresh()
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    async_register_services(hass)
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: UnifiPlayConfigEntry) -> bool:
-    """Unload a config entry."""
+    """Unload a config entry.
+
+    Actions are deliberately not removed: they were registered in
+    ``async_setup`` for the whole run, so taking them down with one entry
+    would break a second entry that is still loaded, and an automation
+    written against them would break on a reload.
+    """
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        coordinator: UnifiPlayCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
-        await coordinator.async_shutdown()
-        # Services are registered once for the integration, not per entry, so
-        # they only come down with the last one. Left behind they stay visible
-        # in the UI and fail with "No live UniFi Play device".
-        if not hass.data[DOMAIN]:
-            async_unregister_services(hass)
+        await entry.runtime_data.async_shutdown()
     return unload_ok
+
+
+async def async_reload_entry(hass: HomeAssistant, entry: UnifiPlayConfigEntry) -> None:
+    """Reload when the entry's data changes.
+
+    Every setting this integration stores decides how it reaches hardware -
+    which console, which credential, which addresses to probe - so there is
+    nothing that can be applied without rebuilding the connections.
+    """
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: UnifiPlayConfigEntry, device_entry: DeviceEntry
+) -> bool:
+    """Allow the user to delete a device this entry no longer knows about.
+
+    Nothing here removes a device on its own. A speaker that has been
+    unplugged for a week still has entities, history and automations pointing
+    at it, and one failed discovery pass is not evidence that it is gone -
+    UDP silence certainly is not, since Audio Port hardware never answers the
+    probe at all (#5). So removal stays a deliberate action, and this only
+    decides whether to accept it.
+
+    It is accepted when the device is absent from what the integration
+    currently knows: a speaker whose MAC no coordinator reports, or a zone no
+    speaker reports. Refusing while it is still present is what stops a
+    delete that immediately comes back on the next poll, leaving a device
+    with no entities.
+    """
+    coordinator = entry.runtime_data
+
+    for domain, identifier in device_entry.identifiers:
+        if domain != DOMAIN or not isinstance(identifier, str):
+            continue
+        if identifier.startswith("zone_"):
+            if identifier[len("zone_") :] in coordinator.groups:
+                return False
+            continue
+        known = {
+            mac_normalise(state.mac) for state in coordinator.data.values() if state.mac
+        }
+        if mac_normalise(identifier) in known:
+            return False
+    return True

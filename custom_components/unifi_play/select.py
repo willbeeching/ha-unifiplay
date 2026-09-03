@@ -7,7 +7,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -25,7 +24,12 @@ from .const import (
     source_labels,
     source_value,
 )
-from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState, UnifiPlayGroupState
+from .coordinator import (
+    UnifiPlayConfigEntry,
+    UnifiPlayCoordinator,
+    UnifiPlayDeviceState,
+    UnifiPlayGroupState,
+)
 from .entity import (
     UnifiPlayEntity,
     async_setup_optional_entities,
@@ -186,13 +190,20 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
 )
 
 
+# Every command is a fire-and-forget MQTT publish to a device on the LAN:
+# nothing here blocks, nothing rate-limits, and the coordinator's own poll is
+# the only thing that fetches. Serialising would only add latency to a
+# "turn everything down" script.
+PARALLEL_UPDATES = 0
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: UnifiPlayConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up UniFi Play select entities."""
-    coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
 
     def _factory(device_id: str) -> list[UnifiPlaySelect]:
         state = coordinator.data[device_id]

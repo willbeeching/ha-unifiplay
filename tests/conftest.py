@@ -504,10 +504,10 @@ async def synced_zone(
 def entry_coordinator(hass: HomeAssistant, entry: ConfigEntry) -> Any:
     """The coordinator behind a loaded entry.
 
-    A single accessor so the move from ``hass.data`` to ``runtime_data`` is
-    one edit rather than one per test.
+    A single accessor, so a change of where the coordinator lives is one
+    edit rather than one per test.
     """
-    return hass.data[DOMAIN][entry.entry_id]
+    return entry.runtime_data
 
 
 def all_devices(*devices: FakeDevice) -> Iterable[FakeDevice]:

@@ -5,12 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .coordinator import UnifiPlayCoordinator
+from .coordinator import UnifiPlayConfigEntry, UnifiPlayCoordinator
 from .entity import UnifiPlayEntity, async_setup_platform_entities
 
 
@@ -39,13 +37,20 @@ BUTTONS: tuple[UnifiPlayButtonDescription, ...] = (
 )
 
 
+# Every command is a fire-and-forget MQTT publish to a device on the LAN:
+# nothing here blocks, nothing rate-limits, and the coordinator's own poll is
+# the only thing that fetches. Serialising would only add latency to a
+# "turn everything down" script.
+PARALLEL_UPDATES = 0
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: UnifiPlayConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up UniFi Play button entities."""
-    coordinator: UnifiPlayCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
 
     def _factory(device_id: str) -> list[ButtonEntity]:
         entities: list[ButtonEntity] = [
