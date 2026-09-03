@@ -60,6 +60,12 @@ jobs:
       - name: flake8
         run: flake8 custom_components/unifi_play/ tests/ scripts/
 
+      # A ${{ }} inside a run: block is text substitution before bash parses
+      # the line, so a dispatch input or a branch name becomes source. The
+      # release workflow is the one holding a token that can write here.
+      - name: No expression reaches a shell script
+        run: python scripts/check_workflow_injection.py
+
   protocol-guards:
     name: Protocol guards
     runs-on: ubuntu-latest

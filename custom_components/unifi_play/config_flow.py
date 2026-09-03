@@ -23,6 +23,7 @@ from .api import (
     UnifiPlayApi,
     UnifiPlayApiError,
     UnifiPlayAuthError,
+    UnifiPlayCertificateError,
     UnifiPlayForbiddenError,
     UnifiPlayServiceUnavailableError,
     UnifiPlayTransientError,
@@ -36,6 +37,7 @@ from .const import (
     CONF_CONTROLLER_HOST,
     CONF_MANUAL_HOSTS,
     CONF_MODE,
+    CONF_VERIFY_SSL,
     DOMAIN,
     MODE_CONSOLE,
     MODE_DIRECT,
@@ -50,10 +52,16 @@ from .zone_writer import ZoneWriteResult
 
 _LOGGER = logging.getLogger(__name__)
 
+# Verification is offered on by default. Most consoles will refuse it - they
+# present a certificate for a name nobody connects by - and the flow says so
+# and offers the box. That costs one extra submit and makes handing an API key
+# to an unverified endpoint a decision somebody made rather than one the
+# integration made for them.
 STEP_CONSOLE_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_CONTROLLER_HOST): str,
         vol.Required(CONF_API_KEY): str,
+        vol.Required(CONF_VERIFY_SSL, default=True): bool,
     }
 )
 
@@ -74,6 +82,7 @@ STEP_RECONFIGURE_CONSOLE_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_CONTROLLER_HOST): str,
         vol.Optional(CONF_API_KEY): str,
+        vol.Required(CONF_VERIFY_SSL, default=False): bool,
     }
 )
 
@@ -155,7 +164,7 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def _async_validate_console(
-        self, host: str, api_key: str
+        self, host: str, api_key: str, verify_ssl: bool
     ) -> tuple[str, list[dict[str, Any]], dict[str, str]]:
         """Probe a console. Returns (normalised host, devices, errors).
 
@@ -169,7 +178,7 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
         """
         errors: dict[str, str] = {}
         api = UnifiPlayApi(
-            host, api_key, async_get_clientsession(self.hass, verify_ssl=False)
+            host, api_key, async_get_clientsession(self.hass, verify_ssl=verify_ssl)
         )
         normalized_host = api.host
         devices: list[dict[str, Any]] = []
@@ -193,6 +202,10 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
             errors["base"] = "unsupported_api"
         except UnifiPlayTransientError:
             errors["base"] = "console_busy"
+        except UnifiPlayCertificateError:
+            # Not a network fault, and the form already carries the box that
+            # settles it, so this says which box rather than "cannot connect".
+            errors["base"] = "certificate_untrusted"
         except UnifiPlayApiError as err:
             # Deliberately not %s of the exception at warning level with the
             # host: the message can carry a response body. The host is safe
@@ -220,8 +233,9 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            verify_ssl = user_input[CONF_VERIFY_SSL]
             normalized_host, devices, errors = await self._async_validate_console(
-                user_input[CONF_CONTROLLER_HOST], user_input[CONF_API_KEY]
+                user_input[CONF_CONTROLLER_HOST], user_input[CONF_API_KEY], verify_ssl
             )
             if not errors:
                 await self.async_set_unique_id(normalized_host)
@@ -237,12 +251,15 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_MODE: MODE_CONSOLE,
                         CONF_CONTROLLER_HOST: normalized_host,
                         CONF_API_KEY: user_input[CONF_API_KEY],
+                        CONF_VERIFY_SSL: verify_ssl,
                     },
                 )
 
         return self.async_show_form(
             step_id="console",
-            data_schema=STEP_CONSOLE_DATA_SCHEMA,
+            data_schema=self.add_suggested_values_to_schema(
+                STEP_CONSOLE_DATA_SCHEMA, user_input or {}
+            ),
             errors=errors,
         )
 
@@ -276,8 +293,9 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             host = user_input[CONF_CONTROLLER_HOST]
             api_key = user_input.get(CONF_API_KEY) or entry.data[CONF_API_KEY]
+            verify_ssl = user_input[CONF_VERIFY_SSL]
             normalized_host, _devices, errors = await self._async_validate_console(
-                host, api_key
+                host, api_key, verify_ssl
             )
             if not errors:
                 # The unique ID is the console address, so moving the entry
@@ -298,6 +316,7 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_MODE: MODE_CONSOLE,
                         CONF_CONTROLLER_HOST: normalized_host,
                         CONF_API_KEY: api_key,
+                        CONF_VERIFY_SSL: verify_ssl,
                     },
                 )
 
@@ -305,7 +324,13 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reconfigure_console",
             data_schema=self.add_suggested_values_to_schema(
                 STEP_RECONFIGURE_CONSOLE_SCHEMA,
-                {CONF_CONTROLLER_HOST: entry.data.get(CONF_CONTROLLER_HOST, "")},
+                {
+                    CONF_CONTROLLER_HOST: entry.data.get(CONF_CONTROLLER_HOST, ""),
+                    # Entries predating this option were all set up without
+                    # verification, so the box shows what the entry is doing
+                    # rather than what a new entry would be offered.
+                    CONF_VERIFY_SSL: entry.data.get(CONF_VERIFY_SSL, False),
+                },
             ),
             errors=errors,
         )
@@ -381,7 +406,9 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
             # console and a different entry. Reconfigure changes the host.
             host = entry.data[CONF_CONTROLLER_HOST]
             _normalized, _devices, errors = await self._async_validate_console(
-                host, user_input[CONF_API_KEY]
+                host,
+                user_input[CONF_API_KEY],
+                entry.data.get(CONF_VERIFY_SSL, False),
             )
             if not errors:
                 return self.async_update_reload_and_abort(

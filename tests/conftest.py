@@ -317,12 +317,48 @@ class ApolloServer:
         self._mocker.get(self.devices_url, exc=TimeoutError())
 
     def connection_error(self) -> None:
-        """DNS, TCP or TLS failure - the console is not there at all."""
+        """DNS or TCP failure - the console is not there at all."""
         import aiohttp
 
         self._mocker.get(
             self.devices_url,
             exc=aiohttp.ClientConnectionError("Cannot connect to host"),
+        )
+
+    def untrusted_certificate(self) -> None:
+        """The console answered and its certificate did not verify.
+
+        What a stock UniFi OS console does at its LAN address: the
+        certificate is signed by Ubiquiti's own CA for a name nobody is
+        connecting by. The real exception type matters here, because it is a
+        subclass of ClientConnectorError and so is caught by the generic
+        connection handler unless the client tests for it first.
+        """
+        import ssl
+
+        import aiohttp
+        from aiohttp.client_reqrep import ConnectionKey
+
+        # A real connection key, because the exception's own __str__ reads
+        # through it. Passing None raises from inside the error handler,
+        # which would fail the test for the wrong reason.
+        key = ConnectionKey(
+            host=self.host,
+            port=443,
+            is_ssl=True,
+            ssl=True,
+            proxy=None,
+            proxy_auth=None,
+            proxy_headers_hash=None,
+        )
+        self._mocker.get(
+            self.devices_url,
+            exc=aiohttp.ClientConnectorCertificateError(
+                key,
+                ssl.SSLCertVerificationError(
+                    "certificate verify failed: self signed certificate"
+                ),
+            ),
         )
 
 

@@ -11,10 +11,14 @@
       },
       "console": {
         "title": "Connect via UniFi OS Console",
-        "description": "Enter your UDM Pro (or UniFi OS Console) IP address or hostname (without https://) and an API key.",
+        "description": "Enter your UDM Pro (or UniFi OS Console) IP address or hostname (without https://) and an API key.\n\nLeave certificate verification on if you reach the console by a name that has a trusted certificate. A console reached at its LAN address presents a certificate signed by Ubiquiti's own CA for a different name, so verification will fail and you will be asked to turn it off. With it off, the API key is sent over a connection whose identity is not checked.",
         "data": {
           "controller_host": "Controller Host",
-          "api_key": "API Key"
+          "api_key": "API Key",
+          "verify_ssl": "Verify the console's TLS certificate"
+        },
+        "data_description": {
+          "verify_ssl": "Turn this off only for a console that presents its own self-signed certificate. The connection is still encrypted; what is not checked is that the console on the other end is the one you meant."
         }
       },
       "direct": {
@@ -36,7 +40,11 @@
         "description": "Point this entry at a different UniFi OS Console — a console rebuilt on a new address, or a DHCP reservation that changed. Enter the IP or hostname without https://.\n\nLeave the API key blank to keep the one already stored. If the console has stopped accepting that key, Home Assistant will ask for a new one on its own.\n\nThis keeps every entity, dashboard card and automation you already have; removing and re-adding the integration does not.",
         "data": {
           "controller_host": "Controller Host",
-          "api_key": "API Key (optional)"
+          "api_key": "API Key (optional)",
+          "verify_ssl": "Verify the console's TLS certificate"
+        },
+        "data_description": {
+          "verify_ssl": "Shows what this entry is doing now. Entries added before this option existed connect without verification."
         }
       },
       "reconfigure_direct": {
@@ -58,7 +66,8 @@
       "no_response": "The addresses you entered answered neither the discovery probe (UDP 10001) nor an MQTT connection (TCP 8883). Check each IP is correct and that no firewall rule blocks those ports between Home Assistant and the speakers.",
       "discovery_failed": "Could not open a discovery socket. Check the Home Assistant logs for details.",
       "unknown": "Unexpected error. Check the Home Assistant logs for details.",
-      "console_busy": "The console answered, but with a rate-limit or server error rather than data. That is usually temporary — a console mid-upgrade or under load. Wait a moment and try again."
+      "console_busy": "The console answered, but with a rate-limit or server error rather than data. That is usually temporary — a console mid-upgrade or under load. Wait a moment and try again.",
+      "certificate_untrusted": "The console answered, but its TLS certificate was not trusted. This is what a stock UniFi OS console does at its LAN address: the certificate is signed by Ubiquiti's own CA for a name you are not connecting by. Either reach the console by a name that has a trusted certificate, or clear the verification checkbox to accept an unverified connection."
     },
     "abort": {
       "already_configured": "This controller is already configured.",

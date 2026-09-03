@@ -103,6 +103,16 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      - id: workflow-injection
+        name: no expression reaches a shell script
+        # A ${{ }} inside a run: block is text substitution before bash sees
+        # the line, so a dispatch input or a tag name becomes source in a job
+        # holding a token that can write to this repository.
+        entry: python3.13 scripts/check_workflow_injection.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       - id: set-groups-payload
         name: set_groups payload has no firmware-owned keys
         # A zone written with "host" set forms correctly on every device but

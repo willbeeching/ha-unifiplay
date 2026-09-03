@@ -34,6 +34,21 @@ MODE_CONSOLE = "console"
 MODE_DIRECT = "direct"
 CONF_MANUAL_HOSTS = "manual_hosts"
 
+# Whether to verify the console's TLS certificate.
+#
+# A UniFi OS console presents a certificate signed by Ubiquiti's own CA for a
+# name the user is not connecting by; connecting to it at its LAN address
+# therefore fails verification on a stock setup. It succeeds when the console
+# is reached by a name that carries a certificate the machine trusts - a
+# reverse proxy, or a hostname with a real certificate installed on the
+# console - which is why this is a choice and not a constant.
+#
+# Absent from an entry created before this existed, and those entries were
+# all set up with verification off, so False is the compatible default. New
+# entries are offered True first: an unverified connection to something
+# holding an API key is worth one extra click to accept knowingly.
+CONF_VERIFY_SSL = "verify_ssl"
+
 MQTT_PORT = 8883
 MQTT_KEEPALIVE = 60
 

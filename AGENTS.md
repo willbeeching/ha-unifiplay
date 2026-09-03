@@ -68,6 +68,8 @@ pre-commit run --all-files --hook-stage pre-push     # flake8, guards, coverage
 python scripts/check_mqtt_client_calls.py       # the guard on its own
 python scripts/check_mqtt_cert_generations.py   # cert-generation fallback, paho stubbed
 python scripts/check_min_ha_version.py --expect-min   # import smoke + floor check
+python scripts/check_workflow_injection.py      # no ${{ }} reaches a shell script
+python scripts/build_release_archive.py         # the release zip, reproducibly
 python scripts/dump_device.py <DEVICE_IP>       # dump a device's live state
 ```
 
@@ -163,6 +165,12 @@ coordinator's `call_soon_threadsafe`. Touching an asyncio primitive directly
 from a paho callback deadlocks under Home Assistant's debug loop, which is
 what the test harness runs.
 
+**`${{ }}` in a `run:` block is not a variable.** GitHub substitutes it as
+text before bash parses the line, so a workflow-dispatch input, a branch name
+or a tag becomes source code in a job that, for the release workflow, holds a
+token with write access to this repository. Bind the value to `env:` and read
+`"$NAME"`. `scripts/check_workflow_injection.py` enforces this and runs in CI.
+
 **Commands must fail loudly.** Entity commands used to no-op when disconnected
 and report success, which made a dead connection look like a broken service
 layer. Raise `HomeAssistantError` via `_require_mqtt()`; never swallow.
@@ -184,6 +192,10 @@ often revert. This is a protocol limitation, not a bug to fix.
   names at all, appearing in the UI as bare keys.
 - `iot_class` is `local_push`: state arrives via MQTT events. The coordinator's
   poll only discovers devices.
+- Console TLS verification is per entry (`CONF_VERIFY_SSL`), offered on for a
+  new entry and defaulting to off for one created before the option existed.
+  Home Assistant caches one shared session per `verify_ssl` value, so asking
+  for the right one is the whole of the choice; never build a session here.
 
 ## Conventions
 

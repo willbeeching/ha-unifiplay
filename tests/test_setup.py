@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import logging
+from unittest.mock import patch
+
+import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.unifi_play.const import DOMAIN
+from custom_components.unifi_play.const import CONF_VERIFY_SSL, DOMAIN
 
 from .conftest import entry_coordinator
-from .const import AMP_IP, AMP_MAC, PORT_IP, PORT_MAC
+from .const import AMP_IP, AMP_MAC, API_KEY, PORT_IP, PORT_MAC
 from .fake_mqtt import FakeDevice, FakeMqttNetwork
 
 
@@ -73,6 +78,121 @@ async def test_console_setup_uses_apollo(
     assert setup_console.state is ConfigEntryState.LOADED
     assert amp.connect_attempts == 1
     assert port.connect_attempts == 1
+
+
+@pytest.mark.parametrize("verify_ssl", [True, False])
+async def test_the_console_session_follows_the_entry(
+    hass: HomeAssistant,
+    console_entry: MockConfigEntry,
+    apollo,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+    verify_ssl: bool,
+) -> None:
+    """Whether the certificate is checked is the entry's decision, not a constant.
+
+    Home Assistant caches one session per verify_ssl setting, so which one is
+    asked for is the whole of the choice. Patched here rather than inspected
+    afterwards because a session does not report the setting it was built
+    with.
+    """
+    apollo.devices()
+    console_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        console_entry, data={**console_entry.data, CONF_VERIFY_SSL: verify_ssl}
+    )
+
+    asked: list[bool] = []
+    real = async_get_clientsession
+
+    def _record(hass_, *args, **kwargs):
+        asked.append(kwargs.get("verify_ssl", True))
+        return real(hass_, *args, **kwargs)
+
+    with patch("custom_components.unifi_play.async_get_clientsession", new=_record):
+        assert await hass.config_entries.async_setup(console_entry.entry_id)
+        await settle(hass)
+
+    assert asked == [verify_ssl]
+
+
+async def test_an_unverified_console_says_so_once(
+    hass: HomeAssistant,
+    console_entry: MockConfigEntry,
+    apollo,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An API key over a connection nobody checked is worth a line in the log.
+
+    Once per setup, not once per request: somebody auditing what Home
+    Assistant talks to should find it, and somebody who has no choice should
+    not have it repeated at them.
+    """
+    apollo.devices()
+    console_entry.add_to_hass(hass)
+
+    with caplog.at_level(logging.WARNING, logger="custom_components.unifi_play"):
+        assert await hass.config_entries.async_setup(console_entry.entry_id)
+        await settle(hass)
+
+    warnings = [
+        record
+        for record in caplog.records
+        if "Certificate verification is off" in record.message
+    ]
+    assert len(warnings) == 1
+    # The address is what the reader needs; the key is not in it.
+    assert API_KEY not in caplog.text
+
+
+async def test_a_verified_console_is_not_warned_about(
+    hass: HomeAssistant,
+    console_entry: MockConfigEntry,
+    apollo,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    apollo.devices()
+    console_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        console_entry, data={**console_entry.data, CONF_VERIFY_SSL: True}
+    )
+
+    with caplog.at_level(logging.WARNING, logger="custom_components.unifi_play"):
+        assert await hass.config_entries.async_setup(console_entry.entry_id)
+        await settle(hass)
+
+    assert "Certificate verification is off" not in caplog.text
+
+
+async def test_a_direct_entry_has_no_console_to_verify(
+    hass: HomeAssistant,
+    direct_entry: MockConfigEntry,
+    udp_discovery,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """Direct mode speaks only MQTT, so there is no HTTP session to ask for."""
+    direct_entry.add_to_hass(hass)
+
+    asked: list[bool] = []
+
+    def _record(hass_, *args, **kwargs):
+        asked.append(kwargs.get("verify_ssl", True))
+        raise AssertionError("direct mode must not build an HTTP session")
+
+    with patch("custom_components.unifi_play.async_get_clientsession", new=_record):
+        assert await hass.config_entries.async_setup(direct_entry.entry_id)
+        await settle(hass)
+
+    assert asked == []
 
 
 async def test_setup_registers_devices(

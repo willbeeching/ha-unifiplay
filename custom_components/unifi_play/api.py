@@ -86,7 +86,21 @@ class UnifiPlayUnsupportedApiError(UnifiPlayApiError):
 
 
 class UnifiPlayConnectionError(UnifiPlayApiError):
-    """The controller could not be reached at all (DNS, TCP, TLS, timeout)."""
+    """The controller could not be reached at all (DNS, TCP, timeout)."""
+
+
+class UnifiPlayCertificateError(UnifiPlayConnectionError):
+    """The console answered, but its TLS certificate was not trusted.
+
+    Separate from the connection error above because the remedy is
+    different and nothing about the network is wrong. A stock UniFi OS
+    console presents a certificate signed by Ubiquiti's own CA for a name
+    the user is not connecting by, so this is what verification against an
+    LAN address produces on a console nobody has installed a certificate on.
+
+    Reported on its own so the config flow can offer the choice rather than
+    sending the user to check cabling.
+    """
 
 
 class UnifiPlayTransientError(UnifiPlayApiError):
@@ -237,6 +251,12 @@ class UnifiPlayApi:
                     raise UnifiPlayApiError(
                         f"Console returned malformed JSON ({resp.status})"
                     ) from err
+        except aiohttp.ClientSSLError as err:
+            # Must precede ClientError: every SSL error is one. The message
+            # is the ssl module's own ("certificate verify failed: self
+            # signed certificate"), which carries no credential.
+            _LOGGER.debug("TLS verification failed for %s: %s", url, err)
+            raise UnifiPlayCertificateError(f"Certificate not trusted: {err}") from err
         except (aiohttp.ClientError, TimeoutError) as err:
             _LOGGER.debug("Connection error for %s: %s", url, err)
             raise UnifiPlayConnectionError(f"Connection error: {err}") from err
@@ -317,6 +337,10 @@ class UnifiPlayApi:
                 if resp.status != 200:
                     raise UnifiPlayApiError(f"Network API status {resp.status}")
                 data: dict[str, Any] = await resp.json(content_type=None)
+        except aiohttp.ClientSSLError as err:
+            raise UnifiPlayCertificateError(
+                f"Network API certificate not trusted: {err}"
+            ) from err
         except (aiohttp.ClientError, TimeoutError) as err:
             raise UnifiPlayApiError(f"Network API error: {err}") from err
         except ValueError as err:

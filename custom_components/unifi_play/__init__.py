@@ -16,6 +16,7 @@ from .const import (
     CONF_CONTROLLER_HOST,
     CONF_MANUAL_HOSTS,
     CONF_MODE,
+    CONF_VERIFY_SSL,
     DOMAIN,
     MODE_CONSOLE,
     MODE_DIRECT,
@@ -68,11 +69,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: UnifiPlayConfigEntry) ->
             manual_hosts=list(entry.data.get(CONF_MANUAL_HOSTS, [])),
         )
     else:
-        # verify_ssl=False because a UniFi OS console presents a certificate
-        # signed by Ubiquiti's own CA for a hostname the user is not
-        # connecting by. Home Assistant still owns this session's lifetime:
-        # it caches one per verify_ssl setting and closes them on shutdown.
-        session = async_get_clientsession(hass, verify_ssl=False)
+        # False for entries created before the option existed: they were all
+        # set up against an unverified console, and turning verification on
+        # under them would break every one of them on upgrade. New entries
+        # are offered verification first and record what was chosen.
+        verify_ssl = entry.data.get(CONF_VERIFY_SSL, False)
+        if not verify_ssl:
+            # Once per setup, not once per request. An unverified TLS
+            # connection carrying an API key is worth saying out loud, and
+            # the log is where somebody auditing what Home Assistant talks to
+            # will look.
+            _LOGGER.warning(
+                "Certificate verification is off for the UniFi Play console at "
+                "%s: the API key is sent over a connection whose identity is "
+                "not checked. Reconfigure the entry to turn it on once the "
+                "console is reachable by a name with a trusted certificate",
+                entry.data[CONF_CONTROLLER_HOST],
+            )
+        # Home Assistant owns this session's lifetime: it caches one per
+        # verify_ssl setting and closes them on shutdown.
+        session = async_get_clientsession(hass, verify_ssl=verify_ssl)
         api = UnifiPlayApi(
             host=entry.data[CONF_CONTROLLER_HOST],
             api_key=entry.data[CONF_API_KEY],

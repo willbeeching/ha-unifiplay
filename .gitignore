@@ -13,6 +13,9 @@ build/
 # Local scratch: patched copy for live testing + protocol capture tooling
 DEPLOY/
 
+# Local virtualenvs for the two test lanes
+.venv*/
+
 # Coverage artefacts (the gate reads coverage.json in CI, then discards it)
 coverage.json
 .coverage

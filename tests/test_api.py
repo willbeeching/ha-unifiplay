@@ -20,6 +20,7 @@ from custom_components.unifi_play.api import (
     UnifiPlayApi,
     UnifiPlayApiError,
     UnifiPlayAuthError,
+    UnifiPlayCertificateError,
     UnifiPlayConnectionError,
     UnifiPlayForbiddenError,
     UnifiPlayServiceUnavailableError,
@@ -295,6 +296,58 @@ async def test_connection_error(api: UnifiPlayApi, apollo: ApolloServer) -> None
     apollo.connection_error()
     with pytest.raises(UnifiPlayConnectionError):
         await api.get_devices()
+
+
+async def test_an_untrusted_certificate_has_its_own_error(
+    api: UnifiPlayApi, apollo: ApolloServer
+) -> None:
+    """And it is still a connection error, so nothing upstream has to learn it.
+
+    aiohttp's certificate error is a subclass of its connection error, so the
+    order of the two except clauses is the whole of this behaviour, and
+    getting it wrong reports "the console is not there" for a console that
+    answered.
+    """
+    apollo.untrusted_certificate()
+    with pytest.raises(UnifiPlayCertificateError):
+        await api.get_devices()
+    assert issubclass(UnifiPlayCertificateError, UnifiPlayConnectionError)
+
+
+async def test_an_untrusted_certificate_does_not_stop_enrichment(
+    api: UnifiPlayApi, apollo: ApolloServer
+) -> None:
+    """Only the Network API refused, and IPs from it are a bonus.
+
+    A console can carry a certificate Apollo's path accepts while the
+    Network application sits behind something else; either way, losing the
+    IP lookup must not lose the devices.
+    """
+    apollo.devices_without_ip()
+    import ssl
+
+    import aiohttp
+    from aiohttp.client_reqrep import ConnectionKey
+
+    key = ConnectionKey(
+        host=apollo.host,
+        port=443,
+        is_ssl=True,
+        ssl=True,
+        proxy=None,
+        proxy_auth=None,
+        proxy_headers_hash=None,
+    )
+    apollo._mocker.get(
+        apollo.clients_url,
+        exc=aiohttp.ClientConnectorCertificateError(
+            key, ssl.SSLCertVerificationError("certificate verify failed")
+        ),
+    )
+
+    devices = await api.get_devices()
+    assert len(devices) == 1
+    assert "ip" not in devices[0]
 
 
 def test_there_is_a_request_timeout() -> None:

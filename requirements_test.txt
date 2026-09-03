@@ -15,3 +15,10 @@ ruff==0.16.5
 # ships no py.typed marker, so this only stops mypy failing on the import;
 # the range matches manifest.json.
 paho-mqtt==2.1.0
+
+# scripts/check_workflow_injection.py parses the workflow files. Listed here
+# because the lint job installs this file on its own, and deliberately not
+# pinned: Home Assistant pins PyYAML itself and the two supported releases
+# pin different versions, so an exact pin here makes one of the two lanes
+# unresolvable.
+PyYAML

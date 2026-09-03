@@ -21,6 +21,7 @@ from custom_components.unifi_play.const import (
     CONF_CONTROLLER_HOST,
     CONF_MANUAL_HOSTS,
     CONF_MODE,
+    CONF_VERIFY_SSL,
     DOMAIN,
     MODE_CONSOLE,
     MODE_DIRECT,
@@ -43,7 +44,14 @@ async def _console(hass: HomeAssistant, **overrides: Any) -> dict[str, Any]:
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"next_step_id": MODE_CONSOLE}
     )
-    data = {CONF_CONTROLLER_HOST: CONSOLE_HOST, CONF_API_KEY: API_KEY, **overrides}
+    data = {
+        CONF_CONTROLLER_HOST: CONSOLE_HOST,
+        CONF_API_KEY: API_KEY,
+        # The form defaults this on; every test that is not about
+        # verification submits what the default would have submitted.
+        CONF_VERIFY_SSL: True,
+        **overrides,
+    }
     return await hass.config_entries.flow.async_configure(result["flow_id"], data)
 
 
@@ -72,6 +80,7 @@ async def test_console_setup_creates_an_entry(
         CONF_MODE: MODE_CONSOLE,
         CONF_CONTROLLER_HOST: CONSOLE_HOST,
         CONF_API_KEY: API_KEY,
+        CONF_VERIFY_SSL: True,
     }
 
 
@@ -215,6 +224,142 @@ async def test_a_second_entry_covering_the_same_speakers_is_refused(
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured_device"
     assert result["description_placeholders"]["entry"] == "UniFi Play (Direct)"
+
+
+# ── Certificate verification ──────────────────────────────────────────────
+
+
+async def test_verification_is_offered_on(hass: HomeAssistant) -> None:
+    """The insecure choice has to be one somebody makes, not one they inherit.
+
+    An API key is being handed to whatever answers on that address, so the
+    form starts from the position that the address is checked.
+    """
+    result = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": MODE_CONSOLE}
+    )
+    schema = result["data_schema"].schema
+    key = next(k for k in schema if k == CONF_VERIFY_SSL)
+    assert key.default() is True
+
+
+async def test_an_untrusted_certificate_says_so(
+    hass: HomeAssistant, apollo: ApolloServer
+) -> None:
+    """ClientConnectorCertificateError is a ClientConnectorError.
+
+    Caught by the generic handler it becomes "check your cabling", which is
+    the one thing that is definitely fine: the console answered.
+    """
+    apollo.untrusted_certificate()
+    result = await _console(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "certificate_untrusted"}
+
+
+async def test_the_form_keeps_what_was_typed_after_a_certificate_refusal(
+    hass: HomeAssistant, apollo: ApolloServer
+) -> None:
+    """The next step is unticking one box, not retyping the address."""
+    apollo.untrusted_certificate()
+    result = await _console(hass)
+    schema = result["data_schema"].schema
+    suggested = {
+        key.schema: key.description["suggested_value"]
+        for key in schema
+        if getattr(key, "description", None)
+    }
+    assert suggested[CONF_CONTROLLER_HOST] == CONSOLE_HOST
+    assert suggested[CONF_VERIFY_SSL] is True
+
+
+async def test_turning_verification_off_gets_past_it(
+    hass: HomeAssistant, apollo: ApolloServer, aioclient_mock
+) -> None:
+    """And the entry records the choice, so setup makes the same one."""
+    apollo.untrusted_certificate()
+    result = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": MODE_CONSOLE}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_CONTROLLER_HOST: CONSOLE_HOST,
+            CONF_API_KEY: API_KEY,
+            CONF_VERIFY_SSL: True,
+        },
+    )
+    assert result["errors"] == {"base": "certificate_untrusted"}
+
+    aioclient_mock.clear_requests()
+    apollo.devices({"err": None, "data": []})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_CONTROLLER_HOST: CONSOLE_HOST,
+            CONF_API_KEY: API_KEY,
+            CONF_VERIFY_SSL: False,
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_VERIFY_SSL] is False
+
+
+async def test_reconfigure_shows_what_the_entry_is_doing_now(
+    hass: HomeAssistant, console_entry: MockConfigEntry
+) -> None:
+    """Not what a new entry would be offered.
+
+    Every entry created before this option existed connects without
+    verification, and a box that reads "on" over a connection that is not
+    verified is worse than no box.
+    """
+    console_entry.add_to_hass(hass)
+    result = await console_entry.start_reconfigure_flow(hass)
+    suggested = {
+        key.schema: key.description["suggested_value"]
+        for key in result["data_schema"].schema
+        if getattr(key, "description", None)
+    }
+    assert suggested[CONF_VERIFY_SSL] is False
+
+
+async def test_reconfigure_can_turn_verification_on(
+    hass: HomeAssistant, console_entry: MockConfigEntry, apollo: ApolloServer
+) -> None:
+    """A console that has been given a real certificate, or put behind one."""
+    console_entry.add_to_hass(hass)
+    result = await console_entry.start_reconfigure_flow(hass)
+
+    apollo.devices({"err": None, "data": []})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_CONTROLLER_HOST: CONSOLE_HOST, CONF_VERIFY_SSL: True},
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert console_entry.data[CONF_VERIFY_SSL] is True
+    # Blank key means keep the stored one.
+    assert console_entry.data[CONF_API_KEY] == API_KEY
+
+
+async def test_reconfigure_refuses_verification_the_console_cannot_pass(
+    hass: HomeAssistant, console_entry: MockConfigEntry, apollo: ApolloServer
+) -> None:
+    """Saving it would break the entry on its next reload, with no clue why."""
+    console_entry.add_to_hass(hass)
+    result = await console_entry.start_reconfigure_flow(hass)
+
+    apollo.untrusted_certificate()
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_CONTROLLER_HOST: CONSOLE_HOST, CONF_VERIFY_SSL: True},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "certificate_untrusted"}
+    assert console_entry.data.get(CONF_VERIFY_SSL, False) is False
 
 
 # ── Direct setup ──────────────────────────────────────────────────────────

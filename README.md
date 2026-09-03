@@ -28,6 +28,16 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 
 ## Requirements
 
+| | Version |
+|---|---|
+| Home Assistant | 2025.8.0 or newer |
+| Python | 3.13 (whatever your Home Assistant runs) |
+| Network | UDP 10001 and TCP 8883 from Home Assistant to each speaker |
+
+Every release is tested against 2025.8.0 and against the current stable Home
+Assistant, on both Python 3.13 and 3.14. The floor moves only in a release
+that says so in its notes.
+
 The integration has two connection modes, chosen at setup:
 
 - **Direct connection (recommended, no console needed).** Home Assistant finds the
@@ -61,6 +71,32 @@ get it, and how to check yours lives in [docs/apollo.md](docs/apollo.md).
 
 Copy the `custom_components/unifi_play` folder into your Home Assistant `config/custom_components/` directory and restart.
 
+Each release also carries a `unifi_play.zip` built from the tagged commit, with a
+`.sha256` beside it. Unpack it into `config/custom_components/`. The archive is
+byte-reproducible from the tag, so `python scripts/build_release_archive.py` on a
+clean checkout of that tag gives you the same checksum.
+
+### Removing it
+
+**Settings → Devices & Services → UniFi Play → ⋮ → Delete.** That removes the
+entry, its devices, and every entity it created. Nothing is left in Home
+Assistant's registries.
+
+Two things survive on purpose, because they are not Home Assistant's to
+delete:
+
+- **Zones stay on the speakers.** They live on the hardware, not in the config
+  entry, and the Play app shows them the same way it did before. Delete them
+  first if you want them gone.
+- **Anything you wrote to a speaker stays set.** Volume limits, EQ presets,
+  alarms and quiet hours were pushed to the device and are still there.
+
+If you installed through HACS, remove the repository there as well; deleting
+the config entry does not uninstall the files. Automations and dashboard cards
+that referenced the entities keep referencing entity IDs that no longer
+resolve, so Home Assistant will report them as unavailable until you edit
+them.
+
 ## Configuration
 
 Go to **Settings → Devices & Services → Add Integration**, search for **UniFi Play**,
@@ -85,7 +121,11 @@ and pick a connection mode.
 2. Choose **Via UniFi OS Console** in the integration setup
 3. Enter your console's IP address or hostname only (e.g. `10.0.0.1` — do not include
    `https://`) and the API key
-4. Devices will be discovered automatically
+4. Decide whether to verify the console's TLS certificate. It starts on. A console
+   reached at its LAN address will fail verification, because the certificate it
+   presents is signed by Ubiquiti's own CA for a name you are not connecting by; setup
+   says so and you can clear the box. See [Security](#security) for what that costs
+5. Devices will be discovered automatically
 
 ## How it works
 
@@ -101,10 +141,32 @@ All communication stays local on your network.
 
 ## Device support
 
-| Platform | Device | Tested |
-|----------|--------|--------|
-| `UPL-AMP` | PowerAmp | Yes (maintainer hardware) |
-| `UPL-PORT` | Audio Port | Community-confirmed working (direct connection; see #4) |
+| Platform | Device | Tested against |
+|----------|--------|----------------|
+| `UPL-AMP` | PowerAmp | Firmware 1.0.38 and 1.0.41, maintainer hardware |
+| `UPL-PORT` | Audio Port | Firmware 1.1.10, community-confirmed (direct connection; see #4) |
+
+Firmware 1.0.41 rotated the MQTT client certificate. Both generations ship with
+the integration and each speaker is probed until one is accepted, so a mixed
+house works and an update does not need any action here. The evidence behind
+that, down to certificate serial numbers, is in
+[docs/api.md](docs/api.md#the-client-certificate-is-rotated-by-firmware).
+
+**Known limitations.**
+
+- Audio Ports do not answer the UDP discovery probe (#5). Enter their IP
+  addresses at setup; they are then identified over MQTT.
+- The device protocol replaces a zone wholesale on each speaker and does not
+  propagate between them, so a zone can only be changed while every speaker it
+  touches is connected. See [Zones](#zones).
+- A zone's host is elected by the speakers, not chosen. `host_mac` is empty for
+  a few seconds after a zone is created or changed, and actions that route
+  through the host fail until it is set.
+- Play, pause, next and previous are relayed to whatever is streaming, so they
+  do nothing on the analogue and passthrough inputs.
+- There is no public protocol documentation. Everything here was
+  reverse-engineered from packet captures and read-backs against real hardware,
+  and a value nobody has measured is marked as unverified rather than guessed.
 
 Ports don't answer UDP discovery, so always enter their IPs during direct-connection
 setup. Port-specific notes: no subwoofer entities, `spdif` is the optical S/PDIF jack,
@@ -113,6 +175,30 @@ Play app), inputs also include USB, and an **Audio Output** select (Line Out / S
 USB) exists only on Ports. If you run into device-specific issues, please include the
 device platform from the logs when opening an issue — and attach a
 `scripts/dump_device.py` capture if you can.
+
+### When a speaker goes offline
+
+Every entity for a speaker becomes **unavailable** the moment its MQTT
+connection drops, rather than freezing on its last value. A volume slider that
+still shows 40% for a speaker that has been unplugged for an hour is worse than
+one that says it does not know.
+
+- **Reconnection is automatic**, with a backoff from 2 to 120 seconds plus
+  jitter, so a switch reboot does not bring the whole house back in lockstep.
+- **After six consecutive failures the client stands down** and the
+  five-minute discovery poll takes over, building a fresh connection and
+  re-probing both certificate generations. This is what recovers a speaker
+  whose firmware update rotated the certificate underneath it.
+- **`binary_sensor.<device>_connected` stays available** when everything else
+  goes away. It is the one entity that can tell you the difference between a
+  speaker that is off and an integration that has stopped.
+- **Console mode keeps running without the console.** The console only answers
+  the question of which speakers exist; state and control are direct MQTT. A
+  console that is rebooting produces no entity changes at all. A console that
+  rejects the API key does prompt for a new one, because nothing else will fix
+  that.
+- **Zone actions refuse rather than half-apply** while any speaker they need is
+  offline. See [Zones](#zones).
 
 ### Transport controls
 
@@ -149,18 +235,49 @@ Two binary sensors are also created per zone/device:
 - **`binary_sensor.<device>_in_zone`** — on when the device is participating in any zone (host or member). Carries a `hosting_group_id` attribute when it is the host. Useful as an automation condition before changing a device's source.
 - **`binary_sensor.<zone>_broadcast_wired_source_active`** — on when the zone is broadcasting a speaker's physical input. Attributes: `source_label` (human-readable), `wb_input`, `wb_device_mac`. Installs created before this sensor was renamed keep the original `binary_sensor.<zone>_wideband_active` entity ID; only the display name changed.
 
-### Services
+### Zone actions
 
-| Service | Key fields |
-|---------|------------|
-| `unifi_play.create_zone` | `name`, `host_device_id`, `member_device_ids` |
-| `unifi_play.delete_zone` | `entity_id` |
-| `unifi_play.add_zone_member` | `entity_id`, `device_id` |
-| `unifi_play.remove_zone_member` | `entity_id`, `device_id` |
-| `unifi_play.rename_zone` | `entity_id`, `name` |
-| `unifi_play.set_zone_index` | `entity_id`, `group_index` |
-| `unifi_play.play_zone_announcement` | `entity_id`, `filename`, `length` — clip must already be on the host device |
-| `unifi_play.stop_zone_announcement` | `entity_id` |
+Every one of these takes `entity_id` (the zone's own media player, not a
+speaker's) except `create_zone`, which has no zone to name yet.
+
+| Action | Parameters | Notes |
+|--------|-----------|-------|
+| `unifi_play.create_zone` | `name`, `host_device_id`, `member_device_ids` (list) | Two or more speakers, none of them already in a zone |
+| `unifi_play.delete_zone` | `entity_id` | Every member returns to standalone |
+| `unifi_play.add_zone_member` | `entity_id`, `device_id` | |
+| `unifi_play.remove_zone_member` | `entity_id`, `device_id` | Removing the host hands the role on; a zone cannot drop below two speakers |
+| `unifi_play.rename_zone` | `entity_id`, `name` | |
+| `unifi_play.set_zone_index` | `entity_id`, `group_index` (0–99) | Sort order in the Play app |
+| `unifi_play.play_zone_announcement` | `entity_id`, `filename`, `length` (seconds, optional) | Routed through the host, so the clip has to already be on it |
+| `unifi_play.stop_zone_announcement` | `entity_id` | |
+
+**A zone action either applies everywhere or nowhere.** A zone is stored as a
+complete document on each speaker, replaced wholesale on every write, and it
+does not propagate between them. Writing to only the speakers that happen to be
+online leaves the rest serving the old definition, which then wins later and
+looks like the change undoing itself.
+
+So every one of these actions checks first, and if any speaker it needs is
+unreachable it writes nothing at all, changes nothing locally, and raises an
+error naming the speakers it could not reach. "Needs" means the members before
+the change, the members after it, and any speaker still caching that zone.
+
+What the errors mean:
+
+| Error | Cause |
+|-------|-------|
+| **Not changing this zone: … cannot be reached** | Some speaker the write needs is offline. Nothing was written. Bring it back and repeat |
+| **A speaker dropped its connection part-way through** | Rare: the preflight passed and a connection died mid-write. The message lists which speakers took the change and which did not. Repeating it once they are all back converges them |
+| **The speakers have not elected a host for this zone yet** | A zone written seconds ago. Usually clears within about thirty seconds |
+| **The speaker hosting this zone is not connected** | Announcements route through the host specifically |
+| **… is already in zone …** | A speaker can be in one zone at a time |
+| **A zone needs at least two speakers** | Delete the zone rather than reducing it to one |
+
+Publishing to a speaker means the message left Home Assistant and the MQTT
+client accepted it. The speakers do not acknowledge zone writes, so success
+here is "every required speaker was written to", not "every speaker has
+applied it". The zone entities reflect what the speakers report back a moment
+later, which is the real confirmation.
 
 ### Automation events
 
@@ -231,6 +348,78 @@ records it once (`Speakers disagree about zone …`) and once again when they
 converge. Editing the zone from Home Assistant or the Play app rewrites it to
 every speaker and resolves it.
 
+## Device actions
+
+Everything below takes `device_id` and acts on one speaker.
+
+| Action | Parameters |
+|--------|-----------|
+| `unifi_play.play_announcement` | `filename`, `length` (seconds, optional), `zone_play` (broadcast to the speaker's zone) |
+| `unifi_play.stop_announcement` | |
+| `unifi_play.delete_announcement_file` | `filename` |
+| `unifi_play.set_alarm` | `alarm_id` (blank creates one), `name`, `hour`, `minute`, `sound`, `volume`, `duration`, `repeat` (list of weekdays, 0 = Sunday), `enabled` |
+| `unifi_play.delete_alarm` | `alarm_id` |
+| `unifi_play.set_quiet_hours` | `quiet_id` (blank creates one), `start_hour`, `start_minute`, `end_hour`, `end_minute`, `repeat`, `wind_down` (minutes) |
+| `unifi_play.delete_quiet_hours` | `quiet_id` |
+| `unifi_play.save_eq_preset` | `name` — saves the speaker's current ten bands |
+| `unifi_play.delete_eq_preset` | `name` |
+| `unifi_play.rename_eq_preset` | `name`, `new_name` |
+
+Announcement filenames name a clip already in the speaker's own storage. A
+filename containing a path is refused rather than sent, and `save_eq_preset`
+refuses if the speaker has not reported its equaliser yet, which it does within
+a second or two of connecting.
+
+All of them raise **No MQTT connection to …** if the speaker is offline. None
+of them queue: an action against an offline speaker fails then and there rather
+than applying later.
+
+## Security
+
+**Everything stays on your network.** The integration talks to speakers over
+MQTT on your LAN and, in console mode, to the console over HTTPS. Nothing is
+sent to Ubiquiti, to the maintainer, or anywhere else.
+
+**MQTT to the speakers** is mutual TLS on port 8883, using the client
+certificate the official Play app carries. Two generations are bundled because
+firmware 1.0.41 rotated the CA; provenance, serial numbers and the extraction
+method are documented in
+[docs/api.md](docs/api.md#the-client-certificate-is-rotated-by-firmware). The
+speakers' own server certificate is **not** verified: it is issued for
+`mqtt.unifi-play.ui.com` while the connection is to a LAN address, so there is
+nothing to verify it against. Client authentication still happens in both
+directions, and a speaker that does not accept the bundled certificate refuses
+the connection.
+
+**HTTPS to the console** is verified by default, and setup offers to turn that
+off because a stock UniFi OS console cannot pass it: the certificate it
+presents is signed by Ubiquiti's own CA for a name nobody connects by. With
+verification off the traffic is still encrypted, but nothing proves the console
+on the other end is yours, and the API key is sent over that connection. The
+integration logs one warning per setup when it is off. To keep it on, reach the
+console by a name that carries a certificate your Home Assistant trusts, then
+turn it back on under **⋮ → Reconfigure**.
+
+**The API key is never logged.** Not at debug level, not in an error message.
+Response bodies for 401 and 403 are withheld from the log too, because some
+products echo the presented key back in them.
+
+**Diagnostics are safe to paste into an issue.** The downloadable report
+(**⋮ → Download diagnostics**) carries no API key, no certificate or key
+material, and no raw MQTT payloads. Addresses, MAC addresses, zone IDs and
+device IDs are replaced with short hashes that stay consistent within one
+report, so a zone's members can still be matched against the speaker list.
+Names you chose are reported as present or absent, never quoted, and the same
+goes for anything playing: the report says `spotify`, never a track title.
+
+## Upgrading
+
+**Coming from 1.3.7 or earlier**, the minimum Home Assistant version has moved
+from 2024.1.0 to 2025.8.0. HACS will not offer the update on an older release,
+so update Home Assistant first. Nothing else changes: existing config entries
+keep working, entity IDs are unchanged, and a console entry keeps connecting
+without certificate verification exactly as it did before the option existed.
+
 ## Troubleshooting
 
 ### Direct connection
@@ -270,6 +459,7 @@ Setup reports a specific reason for each failure. Find your message below:
 | **This console has no Apollo application** | The console answered with its web UI instead of an API, meaning no Apollo route exists | Use **direct connection** instead — some console models never get Apollo ([details](docs/apollo.md)). |
 | **Apollo answered but has no device API** | Apollo is installed but does not serve the expected path — a version mismatch | Please open an issue with your console firmware and Apollo version. |
 | **That address is Ubiquiti's cloud (ui.com)** | You entered `api.ui.com` or another ui.com address. That is the Site Manager cloud API — a different API that does not proxy Apollo | Enter your console's own local IP or hostname, with a key created on that console. |
+| **The console answered, but its TLS certificate was not trusted** | Expected on a stock console at its LAN address: the certificate is signed by Ubiquiti's own CA for a name you are not connecting by | Clear the verification checkbox, or reach the console by a name that carries a certificate Home Assistant trusts. [What that costs](#security). |
 
 Setup succeeds but no devices appear? The API answered with an empty list, so your
 address and key are fine — the console just has no Play hardware visible yet. Devices
@@ -278,6 +468,36 @@ they appear.
 
 To probe the Apollo API by hand (including how to tell "no Apollo" from "bad key"),
 see [docs/apollo.md](docs/apollo.md).
+
+### A speaker connects and then drops
+
+A firmware update can rotate the MQTT client certificate underneath a running
+connection, which looks exactly like a speaker that has died: no error, just a
+disconnect that never recovers. The client gives up after six failed
+reconnects rather than retrying the same rejected certificate forever, and the
+five-minute poll then rebuilds it and re-probes both bundled generations.
+
+Download diagnostics and read `devices[].mqtt.offline_reason`. It says
+`certificate_rejected` for this case, which no amount of network testing would
+have told you. If it says that on a speaker running firmware newer than 1.0.41
+and it never recovers, please open an issue with the firmware version: it
+would mean a third certificate generation exists.
+
+### Zones behave as if they revert
+
+Zones live on the speakers, and each speaker holds its own complete copy. If
+two copies disagree, whichever speaker reports last appears to win, which reads
+as an edit undoing itself a few seconds after it lands.
+
+The log records it once when it starts (`Speakers disagree about zone …`) and
+once when it clears. Diagnostics carry `zone_copies_reported`, which is the
+number of distinct versions each zone is being described in: 1 is agreement,
+anything higher is the problem. Editing the zone from Home Assistant or the
+Play app rewrites the whole document to every speaker and converges them.
+
+The usual cause is an edit made from the Play app while a speaker was
+offline. Home Assistant refuses that write for exactly this reason; the app
+does not.
 
 For anything else, enable debug logging (**Settings → Devices & services → UniFi Play → ⋮ → Enable debug logging**), retry setup, and share lines containing `custom_components.unifi_play` in a GitHub issue (redact your API key). At debug level the integration logs the exact URL requested, HTTP status, and response body.
 

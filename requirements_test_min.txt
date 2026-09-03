@@ -3,6 +3,8 @@
 # pytest-homeassistant-custom-component 0.13.269 pins homeassistant==2025.8.0,
 # which is the floor declared in hacs.json and manifest.json. Bumping this
 # file is a deliberate change of the minimum supported release: update
-# hacs.json, the README compatibility table and docs/testing.md with it.
+# hacs.json, the README compatibility table and the lane table in AGENTS.md
+# with it. scripts/check_min_ha_version.py fails the build if the declared
+# floor and the tested release disagree.
 -r requirements_test.txt
 pytest-homeassistant-custom-component==0.13.269
