@@ -526,6 +526,11 @@ useless — the commits being pushed already contain the unformatted code.
 Python 3.13 is needed, matching CI and Home Assistant itself. The same checks run in CI, so hooks
 are a convenience rather than the gate.
 
+Two lanes are tested, the 2025.8.0 floor and the current stable release, and both have to stay
+green. [`docs/verification.md`](docs/verification.md) has the full matrix and the hardware smoke
+test to run before a release: the suite can prove a value was published, never that the speaker
+did anything with it.
+
 ## Support
 
 This was reverse-engineered and vibe-coded over many late nights, and the AI tokens don't pay for
