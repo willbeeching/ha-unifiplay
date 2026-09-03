@@ -10,6 +10,7 @@ from homeassistant.components.number import (
     NumberEntityDescription,
     NumberMode,
 )
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -41,8 +42,8 @@ class UnifiPlayNumberDescription(NumberEntityDescription):
 NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
     UnifiPlayNumberDescription(
         key="balance",
+        entity_category=EntityCategory.CONFIG,
         translation_key="balance",
-        name="Balance",
         icon="mdi:arrow-left-right",
         native_min_value=-100,
         native_max_value=100,
@@ -53,8 +54,8 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
     ),
     UnifiPlayNumberDescription(
         key="volume_limit",
+        entity_category=EntityCategory.CONFIG,
         translation_key="volume_limit",
-        name="Volume Limit",
         icon="mdi:volume-off",
         native_min_value=0,
         native_max_value=100,
@@ -66,8 +67,8 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
     ),
     UnifiPlayNumberDescription(
         key="screen_brightness",
+        entity_category=EntityCategory.CONFIG,
         translation_key="screen_brightness",
-        name="Screen Brightness",
         icon="mdi:brightness-6",
         native_min_value=0,
         native_max_value=100,
@@ -79,8 +80,8 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
     ),
     UnifiPlayNumberDescription(
         key="led_brightness",
+        entity_category=EntityCategory.CONFIG,
         translation_key="led_brightness",
-        name="LED Brightness",
         icon="mdi:led-on",
         native_min_value=0,
         native_max_value=100,
@@ -92,8 +93,8 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
     ),
     UnifiPlayNumberDescription(
         key="sub_crossover",
+        entity_category=EntityCategory.CONFIG,
         translation_key="sub_crossover",
-        name="Sub Crossover",
         icon="mdi:sine-wave",
         native_min_value=40,
         native_max_value=200,
@@ -107,8 +108,8 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
     ),
     UnifiPlayNumberDescription(
         key="sub_level",
+        entity_category=EntityCategory.CONFIG,
         translation_key="sub_level",
-        name="Sub Level",
         icon="mdi:speaker",
         native_min_value=-10,
         native_max_value=10,
@@ -121,8 +122,8 @@ NUMBERS: tuple[UnifiPlayNumberDescription, ...] = (
     ),
     UnifiPlayNumberDescription(
         key="announcement_volume",
+        entity_category=EntityCategory.CONFIG,
         translation_key="announcement_volume",
-        name="Announcement Volume",
         icon="mdi:bullhorn-outline",
         native_min_value=0,
         native_max_value=100,
@@ -231,7 +232,12 @@ class UnifiPlayEqBand(UnifiPlayEntity, NumberEntity):
     ) -> None:
         super().__init__(coordinator, device_id)
         self._band = band
-        self._attr_name = f"EQ {band}Hz" if band.isdigit() else f"EQ {band}"
+        # Named through the translation, which takes the band as a
+        # placeholder: "32" is hertz, "16k" already carries its unit.
+        self._attr_translation_key = "eq_band"
+        self._attr_translation_placeholders = {
+            "band": f"{band}Hz" if band.isdigit() else band
+        }
         self._attr_unique_id = f"unifi_play_{self._device_state.mac}_eq_{band}"
 
     @property

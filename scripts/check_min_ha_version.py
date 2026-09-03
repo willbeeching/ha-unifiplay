@@ -43,6 +43,7 @@ MODULES = (
     ".config_flow",
     ".const",
     ".coordinator",
+    ".diagnostics",
     ".discovery",
     ".entity",
     ".helpers",
@@ -54,6 +55,7 @@ MODULES = (
     ".services",
     ".switch",
     ".text",
+    ".zone_writer",
 )
 
 

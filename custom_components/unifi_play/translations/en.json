@@ -583,5 +583,132 @@
     "invalid_hex_colour": {
       "message": "{value} is not a six-digit hex colour, for example FF8800."
     }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connectivity": {
+        "name": "Connected"
+      },
+      "admin_lock": {
+        "name": "Admin Lock"
+      },
+      "announcing": {
+        "name": "Announcing"
+      },
+      "in_zone": {
+        "name": "In Zone"
+      },
+      "zone_wideband": {
+        "name": "Broadcast Wired Source Active"
+      }
+    },
+    "button": {
+      "locate": {
+        "name": "Locate"
+      },
+      "restart": {
+        "name": "Restart"
+      },
+      "eq_reset": {
+        "name": "Reset EQ"
+      }
+    },
+    "number": {
+      "balance": {
+        "name": "Balance"
+      },
+      "volume_limit": {
+        "name": "Volume Limit"
+      },
+      "screen_brightness": {
+        "name": "Screen Brightness"
+      },
+      "led_brightness": {
+        "name": "LED Brightness"
+      },
+      "sub_crossover": {
+        "name": "Sub Crossover"
+      },
+      "sub_level": {
+        "name": "Sub Level"
+      },
+      "announcement_volume": {
+        "name": "Announcement Volume"
+      },
+      "eq_band": {
+        "name": "EQ {band}"
+      }
+    },
+    "select": {
+      "audio_input": {
+        "name": "Audio Input"
+      },
+      "audio_output": {
+        "name": "Audio Output"
+      },
+      "eq_preset": {
+        "name": "EQ Preset"
+      },
+      "sub_phase": {
+        "name": "Sub Phase"
+      },
+      "channels": {
+        "name": "Channels"
+      },
+      "streaming_timeout": {
+        "name": "Streaming Timeout"
+      },
+      "announce_chime": {
+        "name": "Announcement Chime"
+      },
+      "zone_broadcasting": {
+        "name": "Stream Broadcasting"
+      }
+    },
+    "sensor": {
+      "upgrade_status": {
+        "name": "Firmware Status"
+      },
+      "streaming_service": {
+        "name": "Streaming Service"
+      },
+      "alarms": {
+        "name": "Alarms"
+      },
+      "quiet_hours": {
+        "name": "Quiet Hours"
+      },
+      "announcements": {
+        "name": "Announcements"
+      },
+      "uptime": {
+        "name": "Uptime"
+      },
+      "space": {
+        "name": "Space"
+      }
+    },
+    "switch": {
+      "dynamic_boost": {
+        "name": "Dynamic Boost"
+      },
+      "equalizer": {
+        "name": "Dolby Atmos / Equalizer"
+      },
+      "persistent_dashboard": {
+        "name": "Persistent Dashboard"
+      },
+      "voice_enhancement": {
+        "name": "Voice Enhancement"
+      },
+      "alarm_sound_test": {
+        "name": "Alarm Sound Test"
+      }
+    },
+    "text": {
+      "led_color": {
+        "name": "LED Color"
+      }
+    }
   }
 }

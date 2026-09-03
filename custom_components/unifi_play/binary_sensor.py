@@ -6,6 +6,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -95,8 +96,11 @@ class UnifiPlayConnectivitySensor(UnifiPlayEntity, BinarySensorEntity):
     page has a single Connected/Disconnected signal.
     """
 
-    _attr_name = "Connected"
+    _attr_translation_key = "connectivity"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    # Diagnostic, not a primary feature: it describes the link to the
+    # speaker rather than anything the speaker is doing.
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self,
@@ -132,8 +136,9 @@ class UnifiPlayAdminLockSensor(UnifiPlayEntity, BinarySensorEntity):
     accepted either way - so Home Assistant just surfaces the state.
     """
 
-    _attr_name = "Admin Lock"
+    _attr_translation_key = "admin_lock"
     _attr_device_class = BinarySensorDeviceClass.LOCK
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self,
@@ -157,8 +162,7 @@ class UnifiPlayAnnouncingSensor(UnifiPlayEntity, BinarySensorEntity):
     duration.
     """
 
-    _attr_name = "Announcing"
-    _attr_icon = "mdi:bullhorn"
+    _attr_translation_key = "announcing"
 
     def __init__(
         self,
@@ -199,8 +203,7 @@ class UnifiPlayInZoneSensor(UnifiPlayEntity, BinarySensorEntity):
     zone, naming a group_id that no longer existed, indefinitely.
     """
 
-    _attr_name = "In Zone"
-    _attr_icon = "mdi:speaker-multiple"
+    _attr_translation_key = "in_zone"
 
     def __init__(
         self,
@@ -252,8 +255,7 @@ class UnifiPlayZoneWidebandSensor(
     """
 
     _attr_has_entity_name = True
-    _attr_name = "Broadcast Wired Source Active"
-    _attr_icon = "mdi:broadcast"
+    _attr_translation_key = "zone_wideband"
 
     def __init__(self, coordinator: UnifiPlayCoordinator, group_id: str) -> None:
         super().__init__(coordinator)

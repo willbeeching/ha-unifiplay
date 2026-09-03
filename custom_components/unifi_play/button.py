@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -23,14 +24,12 @@ BUTTONS: tuple[UnifiPlayButtonDescription, ...] = (
     UnifiPlayButtonDescription(
         key="locate",
         translation_key="locate",
-        name="Locate",
         icon="mdi:map-marker-question",
         press_fn="locate",
     ),
     UnifiPlayButtonDescription(
         key="restart",
         translation_key="restart",
-        name="Restart",
         icon="mdi:restart",
         press_fn="restart",
     ),
@@ -93,8 +92,9 @@ class UnifiPlayEqResetButton(UnifiPlayEntity, ButtonEntity):
     a table of zeroes, which is what this does.
     """
 
-    _attr_name = "Reset EQ"
+    _attr_translation_key = "eq_reset"
     _attr_icon = "mdi:tune-vertical-variant"
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(
         self,

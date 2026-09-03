@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -29,32 +30,32 @@ class UnifiPlaySwitchDescription(SwitchEntityDescription):
 SWITCHES: tuple[UnifiPlaySwitchDescription, ...] = (
     UnifiPlaySwitchDescription(
         key="dynamic_boost",
+        entity_category=EntityCategory.CONFIG,
         translation_key="dynamic_boost",
-        name="Dynamic Boost",
         icon="mdi:volume-vibrate",
         value_fn=lambda s: s.loudness,
         set_fn="set_loudness",
     ),
     UnifiPlaySwitchDescription(
         key="equalizer",
+        entity_category=EntityCategory.CONFIG,
         translation_key="equalizer",
-        name="Dolby Atmos / Equalizer",
         icon="mdi:surround-sound",
         value_fn=lambda s: s.eq_enable,
         set_fn="set_eq_enable",
     ),
     UnifiPlaySwitchDescription(
         key="persistent_dashboard",
+        entity_category=EntityCategory.CONFIG,
         translation_key="persistent_dashboard",
-        name="Persistent Dashboard",
         icon="mdi:monitor-dashboard",
         value_fn=lambda s: s.persistent_dashboard,
         set_fn="set_persistent_dashboard",
     ),
     UnifiPlaySwitchDescription(
         key="voice_enhancement",
+        entity_category=EntityCategory.CONFIG,
         translation_key="voice_enhancement",
-        name="Voice Enhancement",
         icon="mdi:account-voice",
         value_fn=lambda s: s.voice_enhancement,
         set_fn="set_voice_enhancement",
@@ -123,8 +124,7 @@ class UnifiPlayAlarmTestSwitch(UnifiPlayEntity, SwitchEntity):
     tracks what it last asked for.
     """
 
-    _attr_name = "Alarm Sound Test"
-    _attr_icon = "mdi:alarm-light"
+    _attr_translation_key = "alarm_sound_test"
     _attr_assumed_state = True
 
     def __init__(

@@ -986,3 +986,118 @@ async def test_required_speakers_cover_members_and_stale_copies(
     assert writer.required_macs("brand-new", [AMP_MAC, PORT_MAC]) == sorted(
         [AMP_MAC, PORT_MAC]
     )
+
+
+# ── Zone entity state ─────────────────────────────────────────────────────
+
+
+async def test_a_zone_is_unavailable_only_when_nothing_answers(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """One speaker down still leaves real state to show.
+
+    Hiding the whole zone would leave the user with nothing to look at while
+    they work out which room is off; commands are the part that has to be all
+    or nothing, and they refuse individually. With nothing connected there is
+    no state at all, only what the zone was last seen with.
+    """
+    assert hass.states.get(ZONE_ENTITY).state != "unavailable"
+
+    port.drop()
+    await settle(hass)
+    assert hass.states.get(ZONE_ENTITY).state != "unavailable"
+
+    amp.drop()
+    await settle(hass)
+    assert hass.states.get(ZONE_ENTITY).state == "unavailable"
+
+
+async def test_zone_volume_steps_reach_every_member(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """The step is taken from the host's level, so the zone moves together
+    rather than each speaker stepping from wherever it happens to be."""
+    amp.emit("info", {"volume": 40, "vol_limit": 100})
+    port.emit("info", {"volume": 10})
+    await settle(hass)
+    amp.clear()
+    port.clear()
+
+    await hass.services.async_call(
+        "media_player", "volume_up", {ATTR_ENTITY_ID: ZONE_ENTITY}, blocking=True
+    )
+    for device in (amp, port):
+        assert device.last_action("set_volume").body["volume"] == 45
+
+    await hass.services.async_call(
+        "media_player", "volume_down", {ATTR_ENTITY_ID: ZONE_ENTITY}, blocking=True
+    )
+    for device in (amp, port):
+        assert device.last_action("set_volume").body["volume"] == 35
+
+
+async def test_a_zone_reports_the_hosts_volume(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """Members can drift apart; the host is the one the zone is named after."""
+    amp.emit("info", {"volume": 60})
+    port.emit("info", {"volume": 20})
+    await settle(hass)
+
+    state = hass.states.get(ZONE_ENTITY)
+    assert state.attributes["volume_level"] == pytest.approx(0.6)
+
+
+async def test_a_zone_source_list_is_the_union_of_its_members(
+    hass: HomeAssistant, synced_zone: MockConfigEntry
+) -> None:
+    """A mixed zone offers whatever its hardware collectively supports.
+
+    A PowerAmp has eARC and Line In; an Audio Port adds S/PDIF and USB.
+    """
+    options = hass.states.get(ZONE_ENTITY).attributes["source_list"]
+    assert options[0] == "Streaming"
+    assert set(options) == {"Streaming", "eARC", "Line In", "S/PDIF", "USB"}
+
+
+async def test_a_zone_reports_its_membership_as_attributes(
+    hass: HomeAssistant, synced_zone: MockConfigEntry
+) -> None:
+    attrs = hass.states.get(ZONE_ENTITY).attributes
+    assert attrs["group_id"] == ZONE_ID
+    assert sorted(attrs["group_members"]) == sorted([AMP_MAC, PORT_MAC])
+    assert attrs["host_mac"] == AMP_MAC
+    assert attrs["wb_enable"] is False
+
+
+async def test_a_broadcasting_zone_reads_as_playing(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    assert hass.states.get(ZONE_ENTITY).state == "idle"
+
+    body = groups_body(wb_enable=True, wb_device=PORT_MAC, wb_input="spdif")
+    amp.emit("groups", body)
+    port.emit("groups", body)
+    await settle(hass)
+
+    state = hass.states.get(ZONE_ENTITY)
+    assert state.state == "playing"
+    # Resolved against the broadcasting speaker's own platform: the same
+    # label is a different device value on an Audio Port than on a PowerAmp.
+    assert state.attributes["source"] == "S/PDIF"

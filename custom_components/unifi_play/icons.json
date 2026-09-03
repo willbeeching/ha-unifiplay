@@ -1,0 +1,44 @@
+{
+  "entity": {
+    "binary_sensor": {
+      "connectivity": {
+        "default": "mdi:lan-connect",
+        "state": {
+          "off": "mdi:lan-disconnect"
+        }
+      },
+      "announcing": {
+        "default": "mdi:bullhorn-outline",
+        "state": {
+          "on": "mdi:bullhorn"
+        }
+      },
+      "in_zone": {
+        "default": "mdi:speaker",
+        "state": {
+          "on": "mdi:speaker-multiple"
+        }
+      },
+      "zone_wideband": {
+        "default": "mdi:cast-audio-variant",
+        "state": {
+          "on": "mdi:cast-audio"
+        }
+      },
+      "admin_lock": {
+        "default": "mdi:lock-open-variant",
+        "state": {
+          "off": "mdi:lock"
+        }
+      }
+    },
+    "switch": {
+      "alarm_sound_test": {
+        "default": "mdi:alarm-note-off",
+        "state": {
+          "on": "mdi:alarm-note"
+        }
+      }
+    }
+  }
+}

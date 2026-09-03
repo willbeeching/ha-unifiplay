@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -99,7 +100,6 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
     UnifiPlaySelectDescription(
         key="audio_input",
         translation_key="audio_input",
-        name="Audio Input",
         icon="mdi:audio-input-stereo-minijack",
         options=[],
         options_fn=lambda s: list(source_labels(s.platform).values()),
@@ -109,8 +109,8 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
     ),
     UnifiPlaySelectDescription(
         key="audio_output",
+        entity_category=EntityCategory.CONFIG,
         translation_key="audio_output",
-        name="Audio Output",
         icon="mdi:audio-input-rca",
         options=list(OUTPUT_LABELS.values()),
         value_fn=lambda s: OUTPUT_LABELS.get(s.out) if s.out else None,
@@ -120,8 +120,8 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
     ),
     UnifiPlaySelectDescription(
         key="eq_preset",
+        entity_category=EntityCategory.CONFIG,
         translation_key="eq_preset",
-        name="EQ Preset",
         icon="mdi:equalizer",
         options=EQ_PRESET_OPTIONS,
         # Built-in profiles plus whatever custom presets the device holds.
@@ -144,8 +144,8 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
     ),
     UnifiPlaySelectDescription(
         key="sub_phase",
+        entity_category=EntityCategory.CONFIG,
         translation_key="sub_phase",
-        name="Sub Phase",
         icon="mdi:sine-wave",
         options=list(PHASE_OPTIONS.values()),
         value_fn=lambda s: PHASE_OPTIONS.get(str(s.sub_phase)),
@@ -156,8 +156,8 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
     ),
     UnifiPlaySelectDescription(
         key="channels",
+        entity_category=EntityCategory.CONFIG,
         translation_key="channels",
-        name="Channels",
         icon="mdi:surround-sound-2-0",
         options=list(CHANNEL_OPTIONS.values()),
         value_fn=lambda s: CHANNEL_OPTIONS.get(str(s.channels)),
@@ -166,8 +166,8 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
     ),
     UnifiPlaySelectDescription(
         key="streaming_timeout",
+        entity_category=EntityCategory.CONFIG,
         translation_key="streaming_timeout",
-        name="Streaming Timeout",
         icon="mdi:timer-sand",
         options=list(TIMEOUT_OPTIONS.values()),
         value_fn=lambda s: TIMEOUT_OPTIONS.get(s.streaming_timeout),
@@ -176,8 +176,8 @@ SELECTS: tuple[UnifiPlaySelectDescription, ...] = (
     ),
     UnifiPlaySelectDescription(
         key="announce_chime",
+        entity_category=EntityCategory.CONFIG,
         translation_key="announce_chime",
-        name="Announcement Chime",
         icon="mdi:bell-ring",
         options=CHIME_OPTIONS,
         options_fn=lambda s: sorted(
@@ -273,7 +273,8 @@ class UnifiPlayZoneBroadcastingSelect(
     """
 
     _attr_has_entity_name = True
-    _attr_name = "Stream Broadcasting"
+    _attr_translation_key = "zone_broadcasting"
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:cast-variant"
     _attr_options = list(BROADCASTING_MODE_LABELS.values())
 

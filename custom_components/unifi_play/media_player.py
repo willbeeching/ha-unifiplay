@@ -472,7 +472,26 @@ class UnifiPlayZonePlayer(CoordinatorEntity[UnifiPlayCoordinator], MediaPlayerEn
 
     @property
     def available(self) -> bool:
-        return self._group is not None
+        """Available while the zone exists and something in it answers.
+
+        Not "every member is connected": a zone with one speaker down still
+        reports real state - who is in it, what it is playing from - and
+        hiding that would leave the user with nothing to look at while they
+        work out which room is off. Commands are the part that has to be all
+        or nothing, and they refuse individually, naming the speaker.
+
+        With nothing connected there is no state at all, only the values the
+        zone was last seen with, which is exactly what unavailable is for.
+        """
+        gs = self._group
+        if gs is None:
+            return False
+        return any(
+            client is not None and client.is_connected
+            for _dev_id, _state, client in self.coordinator.get_zone_members(
+                self._group_id
+            )
+        )
 
     @property
     def device_info(self) -> DeviceInfo:

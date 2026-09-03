@@ -35,15 +35,14 @@ class UnifiPlaySensorDescription(SensorEntityDescription):
 SENSORS: tuple[UnifiPlaySensorDescription, ...] = (
     UnifiPlaySensorDescription(
         key="upgrade_status",
+        entity_category=EntityCategory.DIAGNOSTIC,
         translation_key="upgrade_status",
-        name="Firmware Status",
         icon="mdi:package-up",
         value_fn=lambda s: s.upgrade_status or None,
     ),
     UnifiPlaySensorDescription(
         key="streaming_service",
         translation_key="streaming_service",
-        name="Streaming Service",
         icon="mdi:cast-audio",
         value_fn=lambda s: (
             SERVICE_LABELS.get(s.service, s.service) if s.service else None
@@ -52,7 +51,6 @@ SENSORS: tuple[UnifiPlaySensorDescription, ...] = (
     UnifiPlaySensorDescription(
         key="alarms",
         translation_key="alarms",
-        name="Alarms",
         icon="mdi:alarm",
         value_fn=lambda s: len(s.alarms),
         attrs_fn=lambda s: {"alarms": s.alarms},
@@ -60,7 +58,6 @@ SENSORS: tuple[UnifiPlaySensorDescription, ...] = (
     UnifiPlaySensorDescription(
         key="quiet_hours",
         translation_key="quiet_hours",
-        name="Quiet Hours",
         icon="mdi:weather-night",
         value_fn=lambda s: len(s.quiet_hours),
         attrs_fn=lambda s: {"quiet_hours": s.quiet_hours},
@@ -68,7 +65,6 @@ SENSORS: tuple[UnifiPlaySensorDescription, ...] = (
     UnifiPlaySensorDescription(
         key="announcements",
         translation_key="announcements",
-        name="Announcements",
         icon="mdi:bullhorn",
         value_fn=lambda s: len(s.ann_files),
         attrs_fn=lambda s: {
@@ -80,7 +76,6 @@ SENSORS: tuple[UnifiPlaySensorDescription, ...] = (
     UnifiPlaySensorDescription(
         key="uptime",
         translation_key="uptime",
-        name="Uptime",
         icon="mdi:timer-outline",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.SECONDS,
@@ -91,7 +86,6 @@ SENSORS: tuple[UnifiPlaySensorDescription, ...] = (
     UnifiPlaySensorDescription(
         key="space",
         translation_key="space",
-        name="Space",
         icon="mdi:home-group",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,

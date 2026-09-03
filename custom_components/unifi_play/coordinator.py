@@ -883,6 +883,18 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             _LOGGER.info("Speakers now agree about zone %r (%s)", name, gid)
         self._conflicted_zones = conflicted
 
+    def zone_copy_counts(self) -> dict[str, int]:
+        """How many distinct documents each zone is being reported with.
+
+        One means the speakers agree. More means a zone that will behave like
+        one that keeps reverting, with nothing in the UI to say so, which is
+        why diagnostics carries it.
+        """
+        return {
+            group_id: len(signatures)
+            for group_id, signatures in self._zone_signatures().items()
+        }
+
     def _zone_signatures(self) -> dict[str, set[tuple[Any, ...]]]:
         """The distinct logical documents each zone is being reported with."""
         signatures: dict[str, set[tuple[Any, ...]]] = {}

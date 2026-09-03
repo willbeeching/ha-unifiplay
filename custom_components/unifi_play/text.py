@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from homeassistant.components.text import TextEntity
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -40,8 +41,10 @@ async def async_setup_entry(
 class UnifiPlayLedColorText(UnifiPlayEntity, TextEntity):
     """Text entity for setting LED/screen color as a hex string."""
 
-    _attr_name = "LED Color"
+    _attr_translation_key = "led_color"
     _attr_icon = "mdi:palette"
+    # A colour is a setting, not something the speaker is doing.
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_native_min = 6
     _attr_native_max = 6
     _attr_pattern = r"[0-9A-Fa-f]{6}"
