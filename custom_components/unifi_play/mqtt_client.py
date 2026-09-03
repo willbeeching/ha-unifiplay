@@ -9,6 +9,23 @@ certificate to match.
 
 So a single bundled certificate is not a safe assumption, and ``connect()``
 tries each generation in ``CERT_GENERATIONS`` until one is accepted.
+
+Execution model
+---------------
+The network loop runs on paho's own thread, started with ``loop_start()``.
+
+It used to run as an asyncio task that submitted ``client.loop(0.5)`` to Home
+Assistant's default executor over and over. That is one executor worker held
+permanently per speaker, out of a pool everything else in Home Assistant
+shares - and it does not reconnect, because only ``loop_forever()`` does, so
+a connection that dropped stayed dead until the coordinator's five-minute
+poll noticed.
+
+paho's thread sleeps in ``select()`` rather than spinning, reconnects on its
+own with the bounded backoff configured below, and belongs to this client
+rather than to Home Assistant. Every callback it delivers crosses back to the
+event loop explicitly: events through :meth:`UnifiPlayMqttClient._signal`,
+everything else through the coordinator's ``call_soon_threadsafe``.
 """
 
 from __future__ import annotations
@@ -16,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import ssl
 import struct
 import time
@@ -78,6 +96,33 @@ CERT_GENERATIONS = (
 # has already completed a handshake by this point, so a CONNACK is one round
 # trip away and this is generous.
 CONNACK_TIMEOUT = 5.0
+
+# Reconnect backoff, in seconds.
+#
+# paho doubles the delay from min to max between attempts. The jitter is what
+# stops a reconnect storm: a switch reboot or an access-point roam drops every
+# speaker in the house at the same instant, and without it they would all come
+# back in lockstep and keep colliding.
+RECONNECT_MIN_DELAY = 2
+RECONNECT_MAX_DELAY = 120
+# Whole seconds: paho's own delays are integers.
+RECONNECT_JITTER = 3
+
+# Consecutive failed reconnects before this client gives up.
+#
+# Giving up matters because paho retries with the *same* credentials forever,
+# and the one failure that never resolves that way is a firmware update
+# rotating the CA (#20). Standing down hands the speaker back to the
+# coordinator's poll, which builds a fresh client and re-probes every bundled
+# generation.
+RECONNECT_ATTEMPT_LIMIT = 6
+
+# How long to wait for paho's thread to finish on shutdown.
+#
+# It is sleeping in select() with a keepalive-bounded timeout, so this is
+# generous. Bounded at all because a shutdown that can hang is a Home
+# Assistant restart that can hang.
+DISCONNECT_TIMEOUT = 5.0
 
 # Which generation each device accepted, keyed by MAC, so steady-state
 # reconnects do not re-probe. Module level because the coordinator builds a
@@ -195,7 +240,16 @@ class UnifiPlayMqttClient:
         self._client_uuid = uuid.uuid4().hex[:12]
         self._pub_topic = f"{TOPIC_MOBILE}/{self._client_uuid}/action"
         self._client: mqtt.Client | None = None
-        self._loop_task: asyncio.Task[None] | None = None
+        self._loop_running = False
+        # Consecutive failed reconnect attempts. Reset by a successful
+        # CONNACK; once it reaches RECONNECT_ATTEMPT_LIMIT this client stops
+        # trying and lets the coordinator rebuild it.
+        self._reconnect_failures = 0
+        self._given_up = False
+        # One log line per transition, not per attempt: a speaker that is off
+        # for a weekend would otherwise write a line every two minutes, and
+        # the line that matters - it came back - would be indistinguishable.
+        self._logged_unavailable = False
         self._connected = asyncio.Event()
         # Set on any CONNACK so a failure code can wake ``_connect_with``
         # without being mistaken for acceptance. ``_connected`` is only set
@@ -210,6 +264,21 @@ class UnifiPlayMqttClient:
     @property
     def is_connected(self) -> bool:
         return self._client is not None and self._client.is_connected()
+
+    @property
+    def is_retrying(self) -> bool:
+        """True while this client is still working on getting itself back.
+
+        The coordinator asks before tearing a disconnected client down: two
+        reconnect loops for one speaker is a reconnect storm with extra
+        steps, and rebuilding mid-backoff throws away the backoff.
+        """
+        return (
+            self._client is not None
+            and self._loop_running
+            and not self._given_up
+            and not self.is_connected
+        )
 
     def _signal(self, event: asyncio.Event, *, set_it: bool) -> None:
         """Set or clear an ``asyncio.Event`` from a paho callback thread.
@@ -239,6 +308,11 @@ class UnifiPlayMqttClient:
     ) -> None:
         _LOGGER.debug("MQTT CONNACK from %s: %s", self._device_ip, rc)
         self._connack_rc = rc
+        if connack_accepted(rc):
+            self._reconnect_failures = 0
+            if self._logged_unavailable:
+                _LOGGER.info("MQTT to %s is back", self._device_ip)
+                self._logged_unavailable = False
         if not connack_accepted(rc):
             # A failure CONNACK is a rejection, not a connection. Setting
             # ``_connected`` here would cache this generation and skip the
@@ -269,7 +343,47 @@ class UnifiPlayMqttClient:
         properties: Any = None,
     ) -> None:
         _LOGGER.debug("MQTT disconnected from %s: %s", self._device_ip, rc)
+        if not self._logged_unavailable:
+            _LOGGER.info(
+                "MQTT to %s dropped (%s); reconnecting with backoff",
+                self._device_ip,
+                rc,
+            )
+            self._logged_unavailable = True
         self._signal(self._connected, set_it=False)
+        if self._on_connection:
+            self._on_connection()
+
+    def _on_connect_fail(self, client: mqtt.Client, userdata: Any) -> None:
+        """A reconnect attempt that never reached a CONNACK.
+
+        paho keeps trying with the same credentials forever, and the one
+        failure that never resolves that way is a firmware update rotating
+        the CA. So this counts, and stands down at the limit so the
+        coordinator can rebuild the client and re-probe every generation.
+        """
+        self._reconnect_failures += 1
+        _LOGGER.debug(
+            "MQTT reconnect to %s failed (%d/%d)",
+            self._device_ip,
+            self._reconnect_failures,
+            RECONNECT_ATTEMPT_LIMIT,
+        )
+        if self._reconnect_failures < RECONNECT_ATTEMPT_LIMIT:
+            return
+        _LOGGER.warning(
+            "MQTT to %s failed %d reconnects; standing down so the next "
+            "discovery pass can start over with a fresh client. If this "
+            "repeats, the speaker's firmware may have rotated its "
+            "certificate authority - see issue #20",
+            self._device_ip,
+            self._reconnect_failures,
+        )
+        self._given_up = True
+        # Stopping from inside paho's own callback is documented as safe and
+        # is the only place that knows the attempt count.
+        client.loop_stop()
+        self._loop_running = False
         if self._on_connection:
             self._on_connection()
 
@@ -376,22 +490,36 @@ class UnifiPlayMqttClient:
         )
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
+        self._client.on_connect_fail = self._on_connect_fail
         self._client.on_message = self._on_message
+        # Bounded exponential backoff with per-client jitter, so a switch
+        # reboot does not bring the whole house back in lockstep.
+        self._client.reconnect_delay_set(
+            min_delay=RECONNECT_MIN_DELAY + random.randint(0, RECONNECT_JITTER),
+            max_delay=RECONNECT_MAX_DELAY,
+        )
 
         loop = asyncio.get_running_loop()
         self._event_loop = loop
         self._connected.clear()
         self._connack_done.clear()
         self._connack_rc = None
+        self._reconnect_failures = 0
+        self._given_up = False
 
+        # tls_set reads the certificate and key off disk and loads the system
+        # trust store, and connect() does DNS, TCP and a TLS handshake. Both
+        # block, so both go to the executor - briefly, unlike the loop that
+        # used to live there permanently.
         await loop.run_in_executor(None, self._setup_tls, generation)
-
         await loop.run_in_executor(
             None, self._client.connect, self._device_ip, MQTT_PORT, MQTT_KEEPALIVE
         )
-        # The loop has to be running before the wait: paho only processes the
-        # CONNACK from inside loop(), so _on_connect can never fire otherwise.
-        self._loop_task = asyncio.create_task(self._mqtt_loop())
+        # The network loop has to be running before the wait: paho processes
+        # the CONNACK on its own thread, so _on_connect can never fire
+        # otherwise.
+        self._client.loop_start()
+        self._loop_running = True
         try:
             await asyncio.wait_for(self._connack_done.wait(), CONNACK_TIMEOUT)
         except TimeoutError as err:
@@ -399,15 +527,14 @@ class UnifiPlayMqttClient:
             # certificate from a TCP-level timeout, which is also a
             # TimeoutError and means something entirely different.
             raise _ConnackTimeout(f"no CONNACK within {CONNACK_TIMEOUT}s") from err
+        except asyncio.CancelledError:
+            # Shutdown, or an entry unloaded mid-dial. paho's thread does not
+            # stop on its own, and one left running holds a socket open and
+            # keeps delivering into a coordinator that no longer exists.
+            await self.disconnect()
+            raise
         if not self._connected.is_set():
             raise _ConnackRefused(f"CONNACK {self._connack_rc}")
-
-    async def _mqtt_loop(self) -> None:
-        """Run the paho loop in a non-blocking fashion."""
-        loop = asyncio.get_running_loop()
-        while self._client is not None:
-            await loop.run_in_executor(None, self._client.loop, 0.5)
-            await asyncio.sleep(0.01)
 
     def publish_action(self, action: str, body: dict[str, Any] | None = None) -> bool:
         """Send a command to the device. True when it reached the socket.
@@ -804,17 +931,48 @@ class UnifiPlayMqttClient:
         self.publish_action("reboot")
 
     async def disconnect(self) -> None:
-        """Disconnect cleanly."""
-        if self._loop_task:
-            self._loop_task.cancel()
+        """Stop the network loop and drop the connection.
+
+        Ordered deliberately: ``disconnect()`` first so the broker gets a
+        clean DISCONNECT rather than a dropped socket, then ``loop_stop()``,
+        which joins paho's thread. The join goes to the executor because it
+        blocks, and is bounded because a shutdown that can hang is a Home
+        Assistant restart that can hang.
+
+        Idempotent: called on every failed certificate generation, on every
+        reconnect, and on unload.
+        """
+        client, self._client = self._client, None
+        if client is not None:
+            # Nothing must reach the callbacks after this point: they close
+            # over a coordinator that is about to go away.
+            client.on_connect_fail = None
+            client.on_disconnect = None
+            client.on_message = None
             try:
-                await self._loop_task
-            except asyncio.CancelledError:
-                pass
-            self._loop_task = None
-        if self._client:
-            self._client.disconnect()
-            self._client = None
+                client.disconnect()
+            except Exception:  # noqa: BLE001 - a half-open client fails any way
+                _LOGGER.debug("MQTT disconnect from %s failed", self._device_ip)
+            if self._loop_running:
+                await self._async_stop_loop(client)
+        self._loop_running = False
+        self._given_up = False
+        self._reconnect_failures = 0
+        self._logged_unavailable = False
         self._connected.clear()
         self._connack_done.clear()
         self._connack_rc = None
+
+    async def _async_stop_loop(self, client: mqtt.Client) -> None:
+        """Join paho's network thread, within DISCONNECT_TIMEOUT."""
+        loop = asyncio.get_running_loop()
+        try:
+            await asyncio.wait_for(
+                loop.run_in_executor(None, client.loop_stop), DISCONNECT_TIMEOUT
+            )
+        except TimeoutError:
+            _LOGGER.warning(
+                "MQTT network loop for %s did not stop within %.0fs",
+                self._device_ip,
+                DISCONNECT_TIMEOUT,
+            )

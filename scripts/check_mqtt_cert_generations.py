@@ -24,6 +24,7 @@ import importlib.util
 import ssl
 import sys
 import tempfile
+import threading
 import types
 from pathlib import Path
 
@@ -67,11 +68,49 @@ class FakeClient:
     def __init__(self, *args: object, **kwargs: object) -> None:
         self.on_connect = None
         self.on_disconnect = None
+        self.on_connect_fail = None
         self.on_message = None
         self._generation: str | None = None
         self._pending: str | None = None
         self._connected = False
         self.subscribed: str | None = None
+        self.reconnect_delays: tuple[int, int] | None = None
+        self.loop_started = 0
+        self.loop_stopped = 0
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+
+    def reconnect_delay_set(self, min_delay: int = 1, max_delay: int = 120) -> None:
+        # Recorded rather than ignored: a client that retries immediately and
+        # forever is a reconnect storm the moment a switch reboots.
+        assert min_delay >= 1
+        assert max_delay > min_delay
+        self.reconnect_delays = (min_delay, max_delay)
+
+    def loop_start(self) -> None:
+        """paho's own network thread, which is where the CONNACK arrives.
+
+        Reproduced with a real thread rather than stubbed away, because the
+        thing this script checks is control flow *around* the CONNACK: the
+        fallback only works if a refusal on one generation lets the next one
+        be dialled, and a refusal under TLS 1.3 is the CONNACK never coming.
+        """
+        self.loop_started += 1
+        self._stop.clear()
+
+        def _run() -> None:
+            while not self._stop.wait(0.005):
+                self.loop()
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+
+    def loop_stop(self) -> None:
+        self.loop_stopped += 1
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
 
     def tls_set(self, certfile: str | None = None, **kwargs: object) -> None:
         self._generation = STATE.path_to_name[str(certfile)]

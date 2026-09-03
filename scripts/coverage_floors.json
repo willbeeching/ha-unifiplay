@@ -7,14 +7,14 @@
     "delete this file and pass --strict once every module clears its",
     "target."
   ],
-  "total": 85.9,
+  "total": 86.1,
   "modules": {
     "api.py": 97.3,
     "binary_sensor.py": 99.3,
     "button.py": 100.0,
     "config_flow.py": 40.7,
     "const.py": 100.0,
-    "coordinator.py": 87.7,
+    "coordinator.py": 88.1,
     "diagnostics.py": 100.0,
     "discovery.py": 98.0,
     "entity.py": 100.0,

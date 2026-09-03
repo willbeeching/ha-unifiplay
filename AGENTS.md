@@ -131,8 +131,10 @@ in CI and on push. If you add an accessor returning a client, annotate it
 
 **`set_groups` is replace-all, per device, and does not propagate.** Every
 device holds a copy of every zone. Writing to one device leaves the others
-serving stale copies that then compete on merge. Use
-`coordinator.publish_zones()`, which fans out to all of them.
+serving stale copies that then compete on merge. Every mutation goes through
+`coordinator.zones` (`zone_writer.py`), which preflights every required
+speaker, writes to all of them or none, and returns a result. Do not publish
+`set_groups` from anywhere else.
 
 **Fields that only appear while true.** `hosting_group` and `sync_devices` are
 sent in `info` only while set, so a device leaving a zone simply stops sending
@@ -147,8 +149,19 @@ entities keep their registry rows and read `unavailable` forever.
 
 **A registered client is not a connected one.** The coordinator inserts the
 client before dialling out, and `publish_action` drops commands silently while
-disconnected. Check `is_connected`, not presence — that distinction is why
-`_require_mqtt()` and `_connected_mqtt()` are separate.
+disconnected (returning `False`, which the zone write path checks). Check
+`is_connected`, not presence — that distinction is why `_require_mqtt()` and
+`_connected_mqtt()` are separate. There is a third state: `is_retrying`, which
+means the client is working on getting itself back and must be left alone.
+
+**The MQTT network loop runs on paho's own thread**, started with
+`loop_start()`. It must never go back to an executor: `client.loop()` in a
+task holds one Home Assistant executor worker permanently per speaker, out of
+a pool everything else shares. Every callback crosses back to the event loop
+explicitly — `asyncio.Event` through `_signal`, everything else through the
+coordinator's `call_soon_threadsafe`. Touching an asyncio primitive directly
+from a paho callback deadlocks under Home Assistant's debug loop, which is
+what the test harness runs.
 
 **Commands must fail loudly.** Entity commands used to no-op when disconnected
 and report success, which made a dead connection look like a broken service

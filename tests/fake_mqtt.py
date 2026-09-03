@@ -142,6 +142,10 @@ class FakeDevice:
     connect_attempts: int = 0
     #: Certificate generations offered, in the order they were tried.
     offered_generations: list[str] = field(default_factory=list)
+    #: Network threads started and stopped, so a test can assert that a
+    #: reload does not leave one behind.
+    loop_threads_started: int = 0
+    loop_threads_stopped: int = 0
 
     _clients: list[_FakeClient] = field(default_factory=list)
 
@@ -183,6 +187,12 @@ class FakeDevice:
         for client in list(self._clients):
             client._deliver(topic, payload)
 
+    def fail_reconnect(self, times: int = 1) -> None:
+        """Report N failed reconnect attempts to every connected client."""
+        for _ in range(times):
+            for client in list(self._clients):
+                client.fail_reconnect()
+
     def drop(self, reason: int = 7) -> None:
         """Drop the connection from the device's end.
 
@@ -213,7 +223,10 @@ class _FakeClient:
         self.client_id = client_id
         self.on_connect: Callable[..., None] | None = None
         self.on_disconnect: Callable[..., None] | None = None
+        self.on_connect_fail: Callable[..., None] | None = None
         self.on_message: Callable[..., None] | None = None
+        #: (min_delay, max_delay) as the integration configured them.
+        self.reconnect_delays: tuple[int, int] | None = None
 
         self._device: FakeDevice | None = None
         self._connected = False
@@ -246,6 +259,19 @@ class _FakeClient:
 
     def tls_insecure_set(self, value: bool) -> None:
         assert value is True
+
+    def reconnect_delay_set(self, min_delay: int = 1, max_delay: int = 120) -> None:
+        """Record the backoff, and assert it is bounded and jittered.
+
+        A client that retries immediately and forever is a reconnect storm
+        the moment a switch reboots, which is the failure this exists to
+        prevent; asserting the shape here means every test that connects
+        checks it.
+        """
+        assert min_delay >= 1, "an immediate retry is a storm"
+        assert max_delay > min_delay, "backoff has to grow"
+        assert max_delay <= 600, "a speaker should not be abandoned for ten minutes"
+        self.reconnect_delays = (min_delay, max_delay)
 
     # ── Connection ────────────────────────────────────────────────────────
 
@@ -343,23 +369,47 @@ class _FakeClient:
         return 0
 
     def loop_start(self) -> int:
-        """Background loop, as ``discovery.py`` uses it."""
+        """paho's own network thread, which is what production uses now.
+
+        The real one sleeps in ``select()``; this one polls the queue. Either
+        way it belongs to the client rather than to Home Assistant's shared
+        executor, which is the property that matters.
+        """
+        if self._loop_thread is not None:
+            return 0
         self._loop_stop.clear()
 
         def _run() -> None:
             while not self._loop_stop.wait(0.001):
                 self.loop(0)
 
-        self._loop_thread = threading.Thread(target=_run, daemon=True)
+        self._loop_thread = threading.Thread(
+            target=_run, name=f"fake-mqtt-{self.client_id}", daemon=True
+        )
         self._loop_thread.start()
+        if self._device is not None:
+            self._device.loop_threads_started += 1
         return 0
 
     def loop_stop(self) -> int:
         self._loop_stop.set()
         if self._loop_thread is not None:
             self._loop_thread.join(timeout=5)
+            assert not self._loop_thread.is_alive(), "network thread did not stop"
             self._loop_thread = None
+            if self._device is not None:
+                self._device.loop_threads_stopped += 1
         return 0
+
+    def fail_reconnect(self) -> None:
+        """A reconnect attempt that never reached a CONNACK.
+
+        paho reports this through ``on_connect_fail`` and keeps trying; the
+        integration counts them so it can stand down and let a fresh client
+        re-probe the certificate generations.
+        """
+        if self.on_connect_fail is not None:
+            self.on_connect_fail(self, None)
 
     # ── Device-driven ─────────────────────────────────────────────────────
 

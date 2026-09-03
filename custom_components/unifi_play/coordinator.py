@@ -587,11 +587,19 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         A console outage is enough to trigger it - the brokers live on the
         speakers, but whatever takes the console away usually takes the
         speakers with it, and only the console comes back on its own.
+
+        A client that is still working on getting itself back is left alone.
+        The client reconnects on its own thread with bounded backoff now, and
+        tearing it down mid-backoff would both throw the backoff away and put
+        two reconnect loops on one speaker.
         """
         moved = device_id in self._address_changed
         existing = self._mqtt_clients.get(device_id)
         if existing is not None:
             if existing.is_connected and not moved:
+                return
+            if existing.is_retrying and not moved:
+                _LOGGER.debug("MQTT to %s is reconnecting on its own; leaving it", ip)
                 return
             if moved:
                 self._address_changed.discard(device_id)
