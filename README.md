@@ -164,17 +164,72 @@ Two binary sensors are also created per zone/device:
 
 ### Automation events
 
-Three events fire on the HA event bus when zone topology changes (use `platform: event` to trigger on them):
+Four events fire on the HA event bus when zone topology changes (use `platform: event` to trigger on them):
 
 | Event | Fires when | Data |
 |-------|-----------|------|
-| `unifi_play_zone_created` | Zone appears — including on HA startup | `group_id`, `name`, `host_mac`, `dev_count` |
-| `unifi_play_zone_deleted` | Zone is removed | `group_id`, `name` |
-| `unifi_play_zone_member_changed` | Member added or removed | `group_id`, `name`, `added_macs`, `removed_macs` |
+| `unifi_play_zone_created` | A zone that did not exist now does | `group_id`, `name`, `host_mac`, `dev_count` |
+| `unifi_play_zone_deleted` | A zone no speaker reports any more | `group_id`, `name` |
+| `unifi_play_zone_renamed` | A zone's name changed | `group_id`, `name`, `previous_name` |
+| `unifi_play_zone_member_changed` | A speaker joined or left a zone | `group_id`, `name`, `added_macs`, `removed_macs` |
 
-> `unifi_play_zone_created` fires for all existing zones on first connect. Add a condition if your automation should only run for genuinely new zones.
->
-> `host_mac` may be empty in this event for a zone that has just been created, because the host is elected by the speakers rather than chosen when the zone is written. Don't rely on it being set; read it from the zone entity later if you need it.
+**One change fires one event.** Every speaker in a zone reports that zone in
+its own state, so a five-speaker zone is described to Home Assistant five
+times. The integration merges those into a single view of each zone and fires
+events from changes to *that*, so renaming a zone fires one
+`unifi_play_zone_renamed` however many speakers are in it. Two consequences
+worth knowing:
+
+- A speaker leaving a zone is a `unifi_play_zone_member_changed`, not a
+  `unifi_play_zone_deleted`, even though that speaker stops reporting the
+  zone entirely. The zone is deleted only when *no* speaker reports it.
+- A speaker re-sending its current state — which happens on every reconnect
+  and after every edit — fires nothing, and neither does a speaker listing
+  the same members in a different order.
+
+**Nothing fires during startup.** Zones that existed before Home Assistant
+connected are not new, so the first report from each speaker after a start or
+a reload is applied silently. The same applies to a speaker that comes online
+later: learning about a zone it was already in is discovery, not a change.
+Automations on these events therefore only see changes made while Home
+Assistant was running — from the Play app, from another Home Assistant
+action, or from the front panel.
+
+An example, on a zone gaining a speaker:
+
+```yaml
+automation:
+  - alias: "Announce when a speaker joins the downstairs zone"
+    triggers:
+      - trigger: event
+        event_type: unifi_play_zone_member_changed
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.event.data.name == 'Downstairs' }}"
+      - condition: template
+        value_template: "{{ trigger.event.data.added_macs | length > 0 }}"
+    actions:
+      - action: notify.persistent_notification
+        data:
+          message: >-
+            {{ trigger.event.data.added_macs | join(', ') }} joined
+            {{ trigger.event.data.name }}
+```
+
+`added_macs` and `removed_macs` are sorted, so comparing two payloads is
+meaningful. MACs are uppercase hex with no separators.
+
+> `host_mac` may be empty in `unifi_play_zone_created` for a zone that has
+> just been written, because the host is elected by the speakers rather than
+> chosen when the zone is created. Don't rely on it being set; read it from
+> the zone entity a moment later if you need it. A host election on its own
+> fires no event at all: the zone has not changed, only which speaker is
+> carrying an internal role.
+
+If your speakers disagree about a zone for more than a few seconds, the log
+records it once (`Speakers disagree about zone …`) and once again when they
+converge. Editing the zone from Home Assistant or the Play app rewrites it to
+every speaker and resolves it.
 
 ## Troubleshooting
 

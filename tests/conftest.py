@@ -458,6 +458,7 @@ def zone_events(hass: HomeAssistant) -> list[tuple[str, dict[str, Any]]]:
         EVENT_ZONE_CREATED,
         EVENT_ZONE_DELETED,
         EVENT_ZONE_MEMBER_CHANGED,
+        EVENT_ZONE_RENAMED,
     )
 
     seen: list[tuple[str, dict[str, Any]]] = []
@@ -468,6 +469,7 @@ def zone_events(hass: HomeAssistant) -> list[tuple[str, dict[str, Any]]]:
     for event_type in (
         EVENT_ZONE_CREATED,
         EVENT_ZONE_DELETED,
+        EVENT_ZONE_RENAMED,
         EVENT_ZONE_MEMBER_CHANGED,
     ):
         hass.bus.async_listen(event_type, _record)

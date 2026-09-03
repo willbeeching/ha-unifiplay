@@ -26,6 +26,7 @@ from .const import (
     EVENT_ZONE_CREATED,
     EVENT_ZONE_DELETED,
     EVENT_ZONE_MEMBER_CHANGED,
+    EVENT_ZONE_RENAMED,
     HOST_ELECTION_REREAD_DELAYS,
     parse_firmware_version,
 )
@@ -38,6 +39,41 @@ _LOGGER = logging.getLogger(__name__)
 def _norm_mac(mac: str) -> str:
     """Normalise a MAC address to uppercase hex without delimiters."""
     return mac.upper().replace(":", "")
+
+
+def _invert(mac: str) -> tuple[int, ...]:
+    """Sort key that makes ``max()`` prefer the LOWEST MAC.
+
+    The merge picks the best candidate with ``max`` on (timestamp, this), so
+    the tie-break has to run the other way round. Inverting the code points
+    is enough: MACs here are normalised hex of equal length.
+    """
+    return tuple(-ord(ch) for ch in mac)
+
+
+def _member_macs(gs: UnifiPlayGroupState) -> set[str]:
+    """The normalised MACs of a zone's members."""
+    return {_norm_mac(d["mac"]) for d in gs.dev_info if d.get("mac")}
+
+
+def _zone_signature(gs: UnifiPlayGroupState) -> tuple[Any, ...]:
+    """A zone reduced to what the integration actually acts on.
+
+    Order-insensitive on members, because a device is free to list them in
+    any order and a reordered copy is not a change. ``host`` is excluded on
+    purpose: it is firmware-owned and legitimately differs between devices
+    mid-election, so including it would report a conflict every time a zone
+    changed hands.
+    """
+    return (
+        gs.name,
+        tuple(sorted(_member_macs(gs))),
+        gs.group_index,
+        gs.broadcasting_mode,
+        gs.wb_enable,
+        _norm_mac(gs.wb_device),
+        gs.wb_input,
+    )
 
 
 @dataclass
@@ -443,6 +479,10 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # can suppress zone_created events that fire for every pre-existing
         # zone on first MQTT connect (startup / reload).
         self._device_groups_initialized: set[str] = set()
+        # Zones currently reported differently by different speakers. Held so
+        # the disagreement is logged once on the way in and once on the way
+        # out, rather than on every event for as long as it lasts.
+        self._conflicted_zones: set[str] = set()
         self.groups: dict[str, UnifiPlayGroupState] = {}
 
     async def _async_update_data(self) -> dict[str, UnifiPlayDeviceState]:
@@ -678,15 +718,28 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         self.async_set_updated_data(self._device_states)
 
     def _update_from_groups(self, device_id: str, body: dict[str, Any]) -> None:
-        """Process a 'groups' event from device_id, fire topology-change events, and update state.
+        """Fold one device's ``groups`` report into the canonical zone view.
 
-        Groups are tracked per source device so that a groups event from device
-        B (which lists only B's zones) does not wipe zones hosted by device A.
-        The public ``self.groups`` is always a merged view across all devices.
+        Every member of a zone reports that zone in its own list, so one
+        logical zone arrives once per connected speaker. Diffing each
+        device's copy against its own previous copy therefore fired one event
+        per speaker for a single change, and worse: a device that left a zone
+        stopped listing it, which read as a deletion even though the zone was
+        still there on everyone else.
 
-        zone_created / zone_deleted / zone_member_changed events are suppressed
-        on the first sync for each device (startup / reload) to avoid flooding
-        the event bus with zones that already existed before HA connected.
+        So the order here is fixed and matters:
+
+        1. snapshot the canonical view;
+        2. replace this device's cached copy;
+        3. rebuild the canonical view from every device's cache;
+        4. diff old canonical against new canonical;
+        5. fire one event per logical change.
+
+        Events are suppressed while a device is doing its first sync of this
+        coordinator's life. Those zones existed before Home Assistant
+        connected: announcing them as newly created would fire a burst on
+        every startup and reload, and an automation cannot tell that burst
+        from a real one.
         """
         incoming = {
             g["group_id"]: UnifiPlayGroupState.from_mqtt(g)
@@ -701,88 +754,165 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         )
 
         is_initial = device_id not in self._device_groups_initialized
-        old_device_groups = self._device_groups.get(device_id, {})
+        previous = self.groups
 
-        if not is_initial:
-            # Fire events for zones that disappeared from this device.
-            for gid in set(old_device_groups) - set(incoming):
-                gs = old_device_groups[gid]
-                self.hass.bus.async_fire(
-                    EVENT_ZONE_DELETED, {"group_id": gid, "name": gs.name}
-                )
-
-            # Fire events for new zones and member-list changes on this device.
-            for gid, new_gs in incoming.items():
-                if gid not in old_device_groups:
-                    self.hass.bus.async_fire(
-                        EVENT_ZONE_CREATED,
-                        {
-                            "group_id": gid,
-                            "name": new_gs.name,
-                            "host_mac": new_gs.host_mac,
-                            "dev_count": new_gs.dev_count,
-                        },
-                    )
-                else:
-                    old_gs = old_device_groups[gid]
-                    old_macs = {
-                        _norm_mac(d["mac"]) for d in old_gs.dev_info if d.get("mac")
-                    }
-                    new_macs = {
-                        _norm_mac(d["mac"]) for d in new_gs.dev_info if d.get("mac")
-                    }
-                    added = new_macs - old_macs
-                    removed = old_macs - new_macs
-                    if added or removed:
-                        self.hass.bus.async_fire(
-                            EVENT_ZONE_MEMBER_CHANGED,
-                            {
-                                "group_id": gid,
-                                "name": new_gs.name,
-                                "added_macs": list(added),
-                                "removed_macs": list(removed),
-                            },
-                        )
-
-        # Update per-device cache and rebuild merged view.
         self._device_groups[device_id] = dict(incoming)
         self._device_groups_initialized.add(device_id)
+        self.groups = self._rebuild_canonical_zones()
+        self._log_zone_conflicts()
 
-        # Every member of a zone reports that zone in its own groups list, so
-        # the same zone arrives from several devices. Only the host's copy is
-        # authoritative: after an edit the host emits the new state at once,
-        # while members keep serving their previous copy until they resync. A
-        # plain dict merge lets one of those stale copies land last and
-        # silently revert the edit.
-        # A device only claims a zone if its own copy names it as host. That is
-        # still ambiguous while a zone changes hands - the old host keeps
-        # serving a copy that names ITSELF until it resyncs, so two devices
-        # claim the same zone at once. Break that on the wire timestamp, which
-        # the writer stamps and every device echoes back unchanged: the most
-        # recently written copy is the true one. Preferring "whichever device
-        # reported last" instead would resurrect a stale claim every time the
-        # old host happened to speak.
-        merged: dict[str, UnifiPlayGroupState] = {}
-        host_copies: dict[str, UnifiPlayGroupState] = {}
-        for src_device_id, dg in self._device_groups.items():
+        if is_initial:
+            return
+        self._fire_zone_events(previous, self.groups)
+
+    def _rebuild_canonical_zones(self) -> dict[str, UnifiPlayGroupState]:
+        """Merge every device's cached copies into one view of each zone.
+
+        Only the host's copy is authoritative: after an edit the host emits
+        the new state at once while members keep serving their previous copy
+        until they resync, so a plain dict merge lets a stale copy land last
+        and silently revert the edit.
+
+        A device claims a zone only when its own copy names it as host, and
+        two devices can claim the same zone at once while it changes hands -
+        the old host keeps serving a copy naming itself until it resyncs.
+        The tie-break is deliberately NOT "whichever device reported last":
+        that resurrects a stale claim every time the old host happens to
+        speak, and it makes the merged result depend on event ordering, so
+        rebuilding from the same caches twice could give two answers.
+
+        Instead the order is total and stable: highest wire timestamp first,
+        then the lowest source MAC. The MAC half is arbitrary - it exists to
+        be *stable*, not to be right - and it only ever decides between two
+        devices that both claim host, which is a transient state the next
+        resync resolves. (The timestamp half is currently vestigial: the
+        groups event carries a timestamp at the top level of the body and
+        never inside a group, so every copy compares equal at zero. It is
+        kept because a firmware that starts echoing it would immediately be
+        the better signal.)
+        """
+        claims: dict[str, list[tuple[int, str, UnifiPlayGroupState]]] = {}
+        fallbacks: dict[str, list[tuple[str, UnifiPlayGroupState]]] = {}
+
+        for src_device_id, device_zones in self._device_groups.items():
             src_state = self._device_states.get(src_device_id)
             src_mac = _norm_mac(src_state.mac) if src_state else ""
-            for gid, gs in dg.items():
-                merged.setdefault(gid, gs)
-                if not (src_mac and _norm_mac(gs.host_mac) == src_mac):
-                    continue
-                best = host_copies.get(gid)
-                if (
-                    best is None
-                    or gs.timestamp > best.timestamp
-                    # Equal timestamps (or firmware that omits them) fall back
-                    # to the device whose event we are handling right now.
-                    or (gs.timestamp == best.timestamp and src_device_id == device_id)
-                ):
-                    host_copies[gid] = gs
+            for gid, gs in device_zones.items():
+                fallbacks.setdefault(gid, []).append((src_mac, gs))
+                if src_mac and _norm_mac(gs.host_mac) == src_mac:
+                    claims.setdefault(gid, []).append((gs.timestamp, src_mac, gs))
 
-        merged.update(host_copies)
-        self.groups = merged
+        merged: dict[str, UnifiPlayGroupState] = {}
+        for gid, candidates in fallbacks.items():
+            claimed = claims.get(gid)
+            if claimed:
+                # Highest timestamp wins; lowest source MAC breaks the tie.
+                _, _, gs = max(claimed, key=lambda item: (item[0], _invert(item[1])))
+                merged[gid] = gs
+                continue
+            # Nobody claims it - a freshly written zone before the firmware
+            # has elected a host, or a zone whose host is offline. Pick by the
+            # same stable rule so the answer does not depend on event order.
+            merged[gid] = min(candidates, key=lambda item: item[0])[1]
+        return merged
+
+    def _log_zone_conflicts(self) -> None:
+        """Say once when connected speakers disagree, and once when they agree again.
+
+        Disagreement is normal for a moment after any edit - the writer's
+        copy lands on each device at its own pace - so this is not an error.
+        It becomes one when it persists, and the only way to see that in a
+        log is to have the transition recorded rather than a line per event.
+
+        The signature deliberately excludes ``host``: the firmware elects the
+        host and two devices legitimately both claim it while a zone changes
+        hands, so including it would report a conflict on every election.
+        """
+        conflicted: set[str] = set()
+        for gid, signatures in self._zone_signatures().items():
+            if len(signatures) > 1:
+                conflicted.add(gid)
+
+        for gid in sorted(conflicted - self._conflicted_zones):
+            name = self.groups[gid].name if gid in self.groups else gid
+            _LOGGER.warning(
+                "Speakers disagree about zone %r (%s): %d different copies are "
+                "being reported. Home Assistant is using the host's. This "
+                "usually resolves itself within a few seconds of an edit; if "
+                "it persists, edit the zone once from Home Assistant or the "
+                "Play app to converge it",
+                name,
+                gid,
+                len(self._zone_signatures().get(gid, ())),
+            )
+        for gid in sorted(self._conflicted_zones - conflicted):
+            name = self.groups[gid].name if gid in self.groups else gid
+            _LOGGER.info("Speakers now agree about zone %r (%s)", name, gid)
+        self._conflicted_zones = conflicted
+
+    def _zone_signatures(self) -> dict[str, set[tuple[Any, ...]]]:
+        """The distinct logical documents each zone is being reported with."""
+        signatures: dict[str, set[tuple[Any, ...]]] = {}
+        for device_zones in self._device_groups.values():
+            for gid, gs in device_zones.items():
+                signatures.setdefault(gid, set()).add(_zone_signature(gs))
+        return signatures
+
+    def _fire_zone_events(
+        self,
+        previous: dict[str, UnifiPlayGroupState],
+        current: dict[str, UnifiPlayGroupState],
+    ) -> None:
+        """Emit one event per logical change between two canonical views.
+
+        The count is a property of the change, not of how many speakers
+        happened to report it.
+        """
+        for gid in sorted(set(previous) - set(current)):
+            gs = previous[gid]
+            self.hass.bus.async_fire(
+                EVENT_ZONE_DELETED, {"group_id": gid, "name": gs.name}
+            )
+
+        for gid in sorted(set(current) - set(previous)):
+            gs = current[gid]
+            self.hass.bus.async_fire(
+                EVENT_ZONE_CREATED,
+                {
+                    "group_id": gid,
+                    "name": gs.name,
+                    "host_mac": gs.host_mac,
+                    "dev_count": gs.dev_count,
+                },
+            )
+
+        for gid in sorted(set(current) & set(previous)):
+            old_gs, new_gs = previous[gid], current[gid]
+            if old_gs.name != new_gs.name:
+                self.hass.bus.async_fire(
+                    EVENT_ZONE_RENAMED,
+                    {
+                        "group_id": gid,
+                        "name": new_gs.name,
+                        "previous_name": old_gs.name,
+                    },
+                )
+            old_macs = _member_macs(old_gs)
+            new_macs = _member_macs(new_gs)
+            if old_macs == new_macs:
+                continue
+            self.hass.bus.async_fire(
+                EVENT_ZONE_MEMBER_CHANGED,
+                {
+                    "group_id": gid,
+                    "name": new_gs.name,
+                    # Sorted so an automation comparing payloads across two
+                    # runs sees the same list; set iteration order is not
+                    # stable between processes.
+                    "added_macs": sorted(new_macs - old_macs),
+                    "removed_macs": sorted(old_macs - new_macs),
+                },
+            )
 
     def update_zone(
         self,

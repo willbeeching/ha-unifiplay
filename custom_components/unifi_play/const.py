@@ -245,8 +245,14 @@ BROADCASTING_MODE_REVERSE: dict[str, str] = {
 
 # Events fired on the HA event bus when zone topology changes.
 # Automations can trigger on these with event: unifi_play_zone_created etc.
+# One event per logical change, whatever number of speakers report it: the
+# coordinator diffs its canonical zone view, not each device's copy. Nothing
+# fires while a speaker is doing its first sync after a start or reload -
+# those zones existed before Home Assistant connected, and an automation
+# cannot tell a startup burst from a real one.
 EVENT_ZONE_CREATED = "unifi_play_zone_created"
 EVENT_ZONE_DELETED = "unifi_play_zone_deleted"
+EVENT_ZONE_RENAMED = "unifi_play_zone_renamed"
 EVENT_ZONE_MEMBER_CHANGED = "unifi_play_zone_member_changed"
 
 #: Delays (seconds) after a set_groups write at which zones are re-read, to
