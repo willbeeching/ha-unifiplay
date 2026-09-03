@@ -476,6 +476,31 @@ def zone_events(hass: HomeAssistant) -> list[tuple[str, dict[str, Any]]]:
     return seen
 
 
+@pytest.fixture
+async def synced_zone(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle: Callable[[HomeAssistant], Any],
+    zone_events: list[tuple[str, dict[str, Any]]],
+) -> MockConfigEntry:
+    """Both speakers report one zone and have finished their first sync.
+
+    The state everything after startup happens from. The first report from
+    each speaker is applied silently by design, so a test that wants to
+    observe an event - or write to a zone that exists - has to get past it.
+    """
+    from .const import groups_body
+
+    body = groups_body()
+    amp.emit("groups", body)
+    port.emit("groups", body)
+    await settle(hass)
+    assert zone_events == [], "the first sync of each speaker must be silent"
+    return setup_direct
+
+
 def entry_coordinator(hass: HomeAssistant, entry: ConfigEntry) -> Any:
     """The coordinator behind a loaded entry.
 

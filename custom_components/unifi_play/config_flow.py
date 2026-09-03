@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import logging
-import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -15,7 +14,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -44,14 +43,10 @@ from .const import (
     broadcast_input_labels,
     source_value,
 )
-from .coordinator import UnifiPlayCoordinator
+from .coordinator import UnifiPlayCoordinator, UnifiPlayGroupState
 from .discovery import async_resolve_direct
-from .helpers import (
-    dev_info_entry,
-    mac_normalise,
-    move_zone_to_new_host,
-    resolve_device,
-)
+from .helpers import mac_normalise, resolve_device
+from .zone_writer import ZoneWriteResult
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -332,10 +327,14 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
 class UnifiPlayOptionsFlow(OptionsFlow):
     """Zone management via the integration's Configure button.
 
-    Exposes create / rename / add-member / remove-member / delete operations
-    as a multi-step UI that matches HA's native config-flow look and feel.
-    All mutations are sent to the device via MQTT; no config-entry data is
-    actually modified, so the integration is never reloaded by this flow.
+    Create, rename, reorder, add or remove a member, change the source, set
+    stream broadcasting, delete. Every one of them is a call to
+    ``coordinator.zones``, which preflights the speakers, publishes the
+    complete document to each of them and refuses rather than write to some.
+    Nothing here builds a zone payload or reaches for an MQTT client itself.
+
+    No config-entry data is modified, so the integration is never reloaded by
+    this flow: the changes live on the speakers.
     """
 
     def __init__(self) -> None:
@@ -347,6 +346,27 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             self.config_entry.entry_id
         ]
         return coordinator
+
+    # ── Running a mutation ───────────────────────────────────────────────────
+
+    def _run(
+        self, action: Callable[[], ZoneWriteResult]
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Perform a zone write, turning a refusal into a form error.
+
+        The write path raises translated errors naming exactly what is wrong -
+        which speaker is offline, which zone already has it. Those messages
+        are worth showing, so the error key comes from the exception rather
+        than being flattened into one "something went wrong" for every cause.
+        """
+        try:
+            action()
+        except (ServiceValidationError, HomeAssistantError) as err:
+            key = getattr(err, "translation_key", None) or "zone_write_failed"
+            placeholders = getattr(err, "translation_placeholders", None) or {}
+            _LOGGER.debug("Zone write refused: %s %s", key, placeholders)
+            return {"base": key}, dict(placeholders)
+        return {}, {}
 
     def _build_device_options(
         self,
@@ -385,31 +405,24 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             options.append(selector.SelectOptionDict(value=dev_entry.id, label=name))
         return sorted(options, key=lambda o: o["label"])
 
-    def _occupied_zone(
-        self,
-        mac: str,
-        *,
-        allow_hosting: bool = False,
-    ) -> str | None:
-        """Return the group_id of the zone occupying this device, else None.
+    def _mac_for_device_id(self, device_id: str) -> str | None:
+        """Resolve a Home Assistant device id to a speaker MAC."""
+        try:
+            coordinator, internal_id = resolve_device(self.hass, device_id)
+        except ServiceValidationError:
+            _LOGGER.debug("Could not resolve speaker %s", device_id)
+            return None
+        state = (coordinator.data or {}).get(internal_id)
+        return state.mac if state is not None else None
 
-        Returns the group_id rather than the display name because names are
-        neither unique nor guaranteed non-empty (``name`` defaults to "" in
-        UnifiPlayGroupState.from_mqtt). Keying on the name would let a device
-        in one zone be added to a different zone that happens to share its
-        name, and would make an unnamed zone read as "not occupied".
-
-        If allow_hosting is True, appearances as a zone host (siblings) are
-        not considered occupied — a device can host more than one zone.
-        """
-        for gs in self._coordinator.groups.values():
-            for dev in gs.dev_info:
-                if mac_normalise(dev.get("mac", "")) != mac:
-                    continue
-                if allow_hosting and dev.get("host"):
-                    continue
-                return gs.group_id
-        return None
+    def _occupied_macs(self) -> set[str]:
+        """Every speaker currently in any zone this coordinator knows about."""
+        return {
+            mac_normalise(dev.get("mac", ""))
+            for gs in self._coordinator.groups.values()
+            for dev in gs.dev_info
+            if dev.get("mac")
+        }
 
     # ── Top-level menu ───────────────────────────────────────────────────────
 
@@ -430,6 +443,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
             # A multi-select returns a list, but a selector rendered with a
@@ -437,91 +451,28 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             raw_ids: list[str] | str = user_input.get("device_ids") or []
             device_ids: list[str] = [raw_ids] if isinstance(raw_ids, str) else raw_ids
 
-            if len(device_ids) < 2:
-                errors["device_ids"] = "zone_needs_two_devices"
-            else:
-                # First selected device becomes the internal zone host (protocol
-                # requirement); the rest are members. This distinction is not
-                # exposed to the user — any speaker can host.
-                host_dev_id = device_ids[0]
-                member_ids = device_ids[1:]
-
-                try:
-                    host_coordinator, host_internal_id = resolve_device(
-                        self.hass, host_dev_id
-                    )
-                    host_state = (host_coordinator.data or {}).get(host_internal_id)
-                    if host_state is None:
-                        raise Exception("Speaker data not yet available")
-                    host_client = host_coordinator.get_mqtt_client(host_internal_id)
-                except Exception:
-                    _LOGGER.exception("Failed to resolve speaker %s", host_dev_id)
+            macs: list[str] = []
+            for device_id in device_ids:
+                mac = self._mac_for_device_id(device_id)
+                if mac is None:
                     errors["base"] = "resolve_failed"
-                else:
-                    if host_client is None:
-                        errors["base"] = "no_mqtt"
-                    else:
-                        host_mac = mac_normalise(host_state.mac)
-                        occupied = self._occupied_zone(host_mac, allow_hosting=True)
-                        if occupied is None:
-                            for mid in member_ids:
-                                try:
-                                    m_coord, m_internal = resolve_device(self.hass, mid)
-                                    m_state = (m_coord.data or {}).get(m_internal)
-                                    if m_state:
-                                        occupied = self._occupied_zone(
-                                            mac_normalise(m_state.mac)
-                                        )
-                                        if occupied is not None:
-                                            break
-                                except Exception:
-                                    _LOGGER.debug(
-                                        "Could not resolve %s while checking zone "
-                                        "occupancy; treating as unoccupied",
-                                        mid,
-                                        exc_info=True,
-                                    )
-                        if occupied is not None:
-                            errors["base"] = "device_in_other_zone"
+                    break
+                macs.append(mac)
 
-                    if not errors:
-                        # No host is designated at creation - the firmware
-                        # elects one and writes the flag back. Naming a host
-                        # here leaves the member silent; see create_zone in
-                        # services.py and docs/api.md.
-                        dev_info = [dev_info_entry(host_state)]
-                        for mid in member_ids:
-                            try:
-                                m_coord, m_internal = resolve_device(self.hass, mid)
-                                m_state = (m_coord.data or {}).get(m_internal)
-                                if m_state and mac_normalise(m_state.mac) != host_mac:
-                                    dev_info.append(dev_info_entry(m_state))
-                            except Exception:
-                                _LOGGER.warning(
-                                    "Skipping speaker %s during zone creation",
-                                    mid,
-                                    exc_info=True,
-                                )
-                        _LOGGER.debug(
-                            "create_zone: host=%s known_groups=%d dev_info=%s",
-                            host_mac,
-                            len(host_coordinator.groups),
-                            [d.get("mac") for d in dev_info],
-                        )
-                        host_coordinator.update_zone(
-                            group_id=str(uuid.uuid4()),
-                            name=user_input["name"],
-                            dev_info=dev_info,
-                        )
-                        return await self.async_step_init()
+            if not errors:
+                # The order the user picked is preserved but carries no
+                # meaning: the firmware elects the host itself, and naming
+                # one produces a zone that registers everywhere and only
+                # sounds in one room. See docs/api.md.
+                errors, placeholders = self._run(
+                    lambda: self._coordinator.zones.create(
+                        name=user_input["name"], member_macs=macs
+                    )
+                )
+                if not errors:
+                    return await self.async_step_init()
 
-        occupied_macs = {
-            mac_normalise(dev.get("mac", ""))
-            for gs in self._coordinator.groups.values()
-            for dev in gs.dev_info
-            if dev.get("mac")
-        }
-        device_options = self._build_device_options(exclude_macs=occupied_macs)
+        device_options = self._build_device_options(exclude_macs=self._occupied_macs())
         # An empty or single-entry picker renders a form that can never be
         # submitted, so say why instead of showing a dead dialog.
         if len(device_options) < 2 and not errors:
@@ -539,6 +490,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                 }
             ),
             errors=errors,
+            description_placeholders=placeholders or None,
         )
 
     # ── Zone selector (shared by modify + delete paths) ──────────────────────
@@ -589,37 +541,30 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             },
         )
 
+    def _selected_zone(self) -> UnifiPlayGroupState | None:
+        return self._coordinator.groups.get(self._selected_zone_id or "")
+
     # ── Rename ───────────────────────────────────────────────────────────────
 
     async def async_step_rename_zone(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        coordinator = self._coordinator
-        gs = coordinator.groups.get(self._selected_zone_id or "")
+        gs = self._selected_zone()
         if gs is None:
             return self.async_abort(reason="zone_gone")
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
-            client = coordinator.get_host_mqtt_client(gs.group_id)
-            if client is None:
-                errors["base"] = "no_mqtt"
-            else:
-                coordinator.update_zone(
-                    group_id=gs.group_id,
-                    name=user_input["name"],
-                    dev_info=gs.dev_info,
-                    group_index=gs.group_index,
-                    broadcasting_mode=gs.broadcasting_mode,
-                    wb_enable=gs.wb_enable,
-                    wb_device=gs.wb_device,
-                    wb_input=gs.wb_input,
-                )
+            errors, placeholders = self._run(
+                lambda: self._coordinator.zones.rename(gs.group_id, user_input["name"])
+            )
+            if not errors:
                 return await self.async_step_zone_action()
 
         return self.async_show_form(
             step_id="rename_zone",
-            description_placeholders={"zone_name": gs.name},
+            description_placeholders={"zone_name": gs.name, **placeholders},
             data_schema=vol.Schema(
                 {vol.Required("name", default=gs.name): selector.TextSelector()}
             ),
@@ -631,60 +576,30 @@ class UnifiPlayOptionsFlow(OptionsFlow):
     async def async_step_add_zone_member(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        coordinator = self._coordinator
-        gs = coordinator.groups.get(self._selected_zone_id or "")
+        gs = self._selected_zone()
         if gs is None:
             return self.async_abort(reason="zone_gone")
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
-            try:
-                m_coord, m_internal = resolve_device(self.hass, user_input["device_id"])
-                m_state = m_coord.data[m_internal]
-            except Exception:
-                _LOGGER.exception(
-                    "Failed to resolve member device %s", user_input.get("device_id")
-                )
+            mac = self._mac_for_device_id(user_input["device_id"])
+            if mac is None:
                 errors["base"] = "resolve_failed"
             else:
-                m_mac = mac_normalise(m_state.mac)
-                if any(mac_normalise(d.get("mac", "")) == m_mac for d in gs.dev_info):
-                    errors["base"] = "already_member"
-                else:
-                    occupied = self._occupied_zone(m_mac)
-                    if occupied is not None and occupied != gs.group_id:
-                        errors["base"] = "device_in_other_zone"
-                    else:
-                        client = coordinator.get_host_mqtt_client(gs.group_id)
-                        if client is None:
-                            errors["base"] = "no_mqtt"
-                        else:
-                            new_dev_info = list(gs.dev_info) + [dev_info_entry(m_state)]
-                            coordinator.update_zone(
-                                group_id=gs.group_id,
-                                name=gs.name,
-                                dev_info=new_dev_info,
-                                group_index=gs.group_index,
-                                broadcasting_mode=gs.broadcasting_mode,
-                                wb_enable=gs.wb_enable,
-                                wb_device=gs.wb_device,
-                                wb_input=gs.wb_input,
-                            )
-                            return await self.async_step_zone_action()
+                errors, placeholders = self._run(
+                    lambda: self._coordinator.zones.add_member(gs.group_id, mac)
+                )
+                if not errors:
+                    return await self.async_step_zone_action()
 
-        # Exclude all speakers already in any zone.
-        occupied_macs = {
-            mac_normalise(dev.get("mac", ""))
-            for other_gs in self._coordinator.groups.values()
-            for dev in other_gs.dev_info
-            if dev.get("mac")
-        }
-        device_options = self._build_device_options(exclude_macs=occupied_macs)
+        # Exclude every speaker already in any zone.
+        device_options = self._build_device_options(exclude_macs=self._occupied_macs())
         if not device_options and not errors:
             return self.async_abort(reason="no_available_devices")
         return self.async_show_form(
             step_id="add_zone_member",
-            description_placeholders={"zone_name": gs.name},
+            description_placeholders={"zone_name": gs.name, **placeholders},
             data_schema=vol.Schema(
                 {
                     vol.Required("device_id"): selector.SelectSelector(
@@ -700,70 +615,33 @@ class UnifiPlayOptionsFlow(OptionsFlow):
     async def async_step_remove_zone_member(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        coordinator = self._coordinator
-        gs = coordinator.groups.get(self._selected_zone_id or "")
+        gs = self._selected_zone()
         if gs is None:
             return self.async_abort(reason="zone_gone")
-
-        # Any device can be removed, including the one currently hosting: the
-        # host is an internal protocol role, not something the user picked, so
-        # removing it hands the role to another member instead of refusing.
-        removable = list(gs.dev_info)
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
-            target_mac = user_input["member_mac"]
-            new_dev_info = [
-                dict(d)
-                for d in gs.dev_info
-                if mac_normalise(d.get("mac", "")) != mac_normalise(target_mac)
-            ]
-            removing_host = mac_normalise(target_mac) == mac_normalise(gs.host_mac)
-            if len(new_dev_info) == len(gs.dev_info):
-                errors["base"] = "not_a_member"
-            elif len(new_dev_info) < 2:
-                errors["base"] = "zone_needs_two_devices"
-            elif not removing_host:
-                client = coordinator.get_host_mqtt_client(gs.group_id)
-                if client is None:
-                    errors["base"] = "no_mqtt"
-                else:
-                    coordinator.update_zone(
-                        group_id=gs.group_id,
-                        name=gs.name,
-                        dev_info=new_dev_info,
-                        group_index=gs.group_index,
-                        broadcasting_mode=gs.broadcasting_mode,
-                        wb_enable=gs.wb_enable,
-                        wb_device=gs.wb_device,
-                        wb_input=gs.wb_input,
-                    )
-                    return await self.async_step_zone_action()
-            else:
-                # Removing the device that hosts: hand the role to another
-                # member rather than refusing. Shared with the service of the
-                # same name so the two cannot drift apart.
-                old_host_mac = gs.host_mac
-                try:
-                    move_zone_to_new_host(coordinator, gs, new_dev_info, target_mac)
-                except ServiceValidationError:
-                    errors["base"] = "no_mqtt"
-                else:
-                    _LOGGER.debug(
-                        "remove_zone_member: zone %s host %s -> %s",
-                        gs.group_id,
-                        old_host_mac,
-                        new_dev_info[0].get("mac", ""),
-                    )
-                    return await self.async_step_zone_action()
+            # Any speaker can be removed, including the one currently
+            # hosting: the host is an internal protocol role, not something
+            # the user chose, so removing it hands the role over rather than
+            # refusing.
+            errors, placeholders = self._run(
+                lambda: self._coordinator.zones.remove_member(
+                    gs.group_id, user_input["member_mac"]
+                )
+            )
+            if not errors:
+                return await self.async_step_zone_action()
 
         options = [
             selector.SelectOptionDict(value=d["mac"], label=d.get("name", d["mac"]))
-            for d in removable
+            for d in gs.dev_info
+            if d.get("mac")
         ]
         return self.async_show_form(
             step_id="remove_zone_member",
-            description_placeholders={"zone_name": gs.name},
+            description_placeholders={"zone_name": gs.name, **placeholders},
             data_schema=vol.Schema(
                 {
                     vol.Required("member_mac"): selector.SelectSelector(
@@ -779,24 +657,23 @@ class UnifiPlayOptionsFlow(OptionsFlow):
     async def async_step_delete_zone(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        coordinator = self._coordinator
-        gs = coordinator.groups.get(self._selected_zone_id or "")
+        gs = self._selected_zone()
         if gs is None:
             return self.async_abort(reason="zone_gone")
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
-            client = coordinator.get_host_mqtt_client(gs.group_id)
-            if client is None:
-                errors["base"] = "no_mqtt"
-            else:
-                coordinator.delete_zone(gs.group_id)
+            errors, placeholders = self._run(
+                lambda: self._coordinator.zones.delete(gs.group_id)
+            )
+            if not errors:
                 self._selected_zone_id = None
                 return await self.async_step_init()
 
         return self.async_show_form(
             step_id="delete_zone",
-            description_placeholders={"zone_name": gs.name},
+            description_placeholders={"zone_name": gs.name, **placeholders},
             data_schema=vol.Schema({}),
             errors=errors,
         )
@@ -806,46 +683,18 @@ class UnifiPlayOptionsFlow(OptionsFlow):
     async def async_step_set_zone_source(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        coordinator = self._coordinator
-        gs = coordinator.groups.get(self._selected_zone_id or "")
+        gs = self._selected_zone()
         if gs is None:
             return self.async_abort(reason="zone_gone")
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
             if user_input["source_mode"] == "streaming":
-                client = coordinator.get_host_mqtt_client(gs.group_id)
-                if client is None:
-                    errors["base"] = "no_mqtt"
-                else:
-                    coordinator.update_zone(
-                        group_id=gs.group_id,
-                        name=gs.name,
-                        dev_info=gs.dev_info,
-                        group_index=gs.group_index,
-                        broadcasting_mode=gs.broadcasting_mode,
-                        wb_enable=False,
-                        wb_device="",
-                        wb_input="",
-                    )
-                    # Hand the input back on whichever device was broadcasting,
-                    # not the host — they are frequently not the same device.
-                    # Offline is not an error here: the zone is already off the
-                    # wired source, and the device will be on streaming anyway
-                    # once it reconnects to a zone that has none.
-                    if gs.wb_enable:
-                        prev = coordinator.get_mqtt_client_for_mac(
-                            gs.wb_device or gs.host_mac
-                        )
-                        if prev is not None:
-                            prev.set_source("streaming")
-                        else:
-                            _LOGGER.debug(
-                                "Zone %s: previous broadcast device %s is offline; "
-                                "leaving its input alone",
-                                gs.name,
-                                gs.wb_device or gs.host_mac,
-                            )
+                errors, placeholders = self._run(
+                    lambda: self._coordinator.zones.clear_broadcast_source(gs.group_id)
+                )
+                if not errors:
                     return await self.async_step_zone_action()
             else:
                 return await self.async_step_set_zone_wb_device()
@@ -853,7 +702,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
         current_mode = "broadcast" if gs.wb_enable else "streaming"
         return self.async_show_form(
             step_id="set_zone_source",
-            description_placeholders={"zone_name": gs.name},
+            description_placeholders={"zone_name": gs.name, **placeholders},
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -878,11 +727,12 @@ class UnifiPlayOptionsFlow(OptionsFlow):
     async def async_step_set_zone_wb_device(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        coordinator = self._coordinator
-        gs = coordinator.groups.get(self._selected_zone_id or "")
+        gs = self._selected_zone()
         if gs is None:
             return self.async_abort(reason="zone_gone")
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
+        coordinator = self._coordinator
 
         # MAC -> platform for the speakers in this zone. Input names differ by
         # hardware, so the chosen label can only be resolved once we know
@@ -895,35 +745,23 @@ class UnifiPlayOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             source_mac = mac_normalise(user_input["source_device"])
-            platform = member_platforms.get(source_mac, "")
-            wb_input = source_value(platform, user_input["input_type"])
-            client = coordinator.get_host_mqtt_client(gs.group_id)
-            # The input switch has to go to the DEVICE THAT WILL BROADCAST,
-            # which is often not the host. Sending it to the host instead
-            # would switch the wrong device's input and leave the chosen one
-            # untouched — so the two writes are published separately here.
-            source_client = coordinator.get_mqtt_client_for_mac(
-                user_input["source_device"]
+            wb_input = source_value(
+                member_platforms.get(source_mac, ""), user_input["input_type"]
             )
             if wb_input is None:
                 # The picker offers the union across the zone, so an input can
-                # be valid for one device and absent on another.
+                # be valid for one speaker and absent on another.
                 errors["input_type"] = "input_not_on_device"
-            elif client is None or source_client is None:
-                errors["base"] = "no_mqtt"
             else:
-                coordinator.update_zone(
-                    group_id=gs.group_id,
-                    name=gs.name,
-                    dev_info=gs.dev_info,
-                    group_index=gs.group_index,
-                    broadcasting_mode=gs.broadcasting_mode,
-                    wb_enable=True,
-                    wb_device=user_input["source_device"],
-                    wb_input=wb_input,
+                errors, placeholders = self._run(
+                    lambda: coordinator.zones.set_broadcast_source(
+                        gs.group_id,
+                        source_mac=user_input["source_device"],
+                        wb_input=wb_input,
+                    )
                 )
-                source_client.set_source(wb_input)
-                return await self.async_step_zone_action()
+                if not errors:
+                    return await self.async_step_zone_action()
 
         # The option value is the MAC exactly as the device reported it, not a
         # normalised copy: it goes on the wire as wb_device, and every other
@@ -952,7 +790,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                 if label not in input_labels:
                     input_labels.append(label)
         current_input_label = broadcast_input_label(
-            member_platforms.get(default_device, ""), gs.wb_input
+            member_platforms.get(mac_normalise(default_device), ""), gs.wb_input
         )
         if current_input_label not in input_labels:
             current_input_label = input_labels[0] if input_labels else "Line In"
@@ -962,7 +800,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
         ]
         return self.async_show_form(
             step_id="set_zone_wb_device",
-            description_placeholders={"zone_name": gs.name},
+            description_placeholders={"zone_name": gs.name, **placeholders},
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -985,40 +823,33 @@ class UnifiPlayOptionsFlow(OptionsFlow):
     async def async_step_set_zone_broadcasting(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        coordinator = self._coordinator
-        gs = coordinator.groups.get(self._selected_zone_id or "")
+        gs = self._selected_zone()
         if gs is None:
             return self.async_abort(reason="zone_gone")
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
             mode = BROADCASTING_MODE_REVERSE.get(user_input["broadcasting_mode"])
-            client = coordinator.get_host_mqtt_client(gs.group_id)
-            if client is None:
-                errors["base"] = "no_mqtt"
-            elif mode is None:
+            if mode is None:
                 errors["broadcasting_mode"] = "resolve_failed"
             else:
                 # Only the zone's advertising mode changes here, so no
-                # device's physical input is touched.
-                coordinator.update_zone(
-                    group_id=gs.group_id,
-                    name=gs.name,
-                    dev_info=gs.dev_info,
-                    group_index=gs.group_index,
-                    broadcasting_mode=mode,
-                    wb_enable=gs.wb_enable,
-                    wb_device=gs.wb_device,
-                    wb_input=gs.wb_input,
+                # speaker's physical input is touched.
+                errors, placeholders = self._run(
+                    lambda: self._coordinator.zones.set_broadcasting_mode(
+                        gs.group_id, mode
+                    )
                 )
-                return await self.async_step_zone_action()
+                if not errors:
+                    return await self.async_step_zone_action()
 
         current = BROADCASTING_MODE_LABELS.get(
             gs.broadcasting_mode, BROADCASTING_MODE_LABELS[BROADCASTING_MODE_ZONE_ONLY]
         )
         return self.async_show_form(
             step_id="set_zone_broadcasting",
-            description_placeholders={"zone_name": gs.name},
+            description_placeholders={"zone_name": gs.name, **placeholders},
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -1041,32 +872,24 @@ class UnifiPlayOptionsFlow(OptionsFlow):
     async def async_step_reorder_zone(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-        coordinator = self._coordinator
-        gs = coordinator.groups.get(self._selected_zone_id or "")
+        gs = self._selected_zone()
         if gs is None:
             return self.async_abort(reason="zone_gone")
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
 
         if user_input is not None:
-            client = coordinator.get_host_mqtt_client(gs.group_id)
-            if client is None:
-                errors["base"] = "no_mqtt"
-            else:
-                coordinator.update_zone(
-                    group_id=gs.group_id,
-                    name=gs.name,
-                    dev_info=gs.dev_info,
-                    group_index=user_input["group_index"],
-                    broadcasting_mode=gs.broadcasting_mode,
-                    wb_enable=gs.wb_enable,
-                    wb_device=gs.wb_device,
-                    wb_input=gs.wb_input,
+            errors, placeholders = self._run(
+                lambda: self._coordinator.zones.set_index(
+                    gs.group_id, int(user_input["group_index"])
                 )
+            )
+            if not errors:
                 return await self.async_step_zone_action()
 
         return self.async_show_form(
             step_id="reorder_zone",
-            description_placeholders={"zone_name": gs.name},
+            description_placeholders={"zone_name": gs.name, **placeholders},
             data_schema=vol.Schema(
                 {
                     vol.Required(

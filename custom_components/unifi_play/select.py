@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -300,31 +301,26 @@ class UnifiPlayZoneBroadcastingSelect(
         )
 
     async def async_select_option(self, option: str) -> None:
+        """Change how the zone advertises itself to streaming clients.
+
+        Only the advertising mode moves: no physical input is touched, so
+        nothing here publishes set_audio_src, which would switch a real
+        input as a side effect. Every other field of the zone is preserved
+        by the write path, which replaces the whole document on each write.
+        """
         gs = self._group
         if gs is None:
-            return
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="zone_not_found"
+            )
         mode = BROADCASTING_MODE_REVERSE.get(option)
         if mode is None:
-            return
-        client = self.coordinator.get_host_mqtt_client(self._group_id)
-        if not client:
-            _LOGGER.warning("No MQTT client found for zone host %s", gs.host_mac)
-            return
-        # This changes only how the zone advertises itself, so no physical
-        # input is touched - publishing set_audio_src here would switch a real
-        # input as a side effect.
-        # Every other field is echoed back unchanged: the device replaces the
-        # whole zone on each write, so omitting one would clear it.
-        self.coordinator.update_zone(
-            group_id=gs.group_id,
-            name=gs.name,
-            dev_info=gs.dev_info,
-            group_index=gs.group_index,
-            broadcasting_mode=mode,
-            wb_enable=gs.wb_enable,
-            wb_device=gs.wb_device,
-            wb_input=gs.wb_input,
-        )
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_option",
+                translation_placeholders={"option": option},
+            )
+        self.coordinator.zones.set_broadcasting_mode(gs.group_id, mode)
 
 
 class UnifiPlaySelect(UnifiPlayEntity, SelectEntity):

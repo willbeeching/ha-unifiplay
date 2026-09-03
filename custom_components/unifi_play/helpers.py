@@ -30,12 +30,20 @@ def resolve_device(
     """
     entry = dr.async_get(hass).async_get(device_id)
     if entry is None:
-        raise ServiceValidationError(f"Unknown device: {device_id}")
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="unknown_device",
+            translation_placeholders={"device_id": device_id},
+        )
     norm_macs = {
         mac_normalise(ident[1]) for ident in entry.identifiers if ident[0] == DOMAIN
     }
     if not norm_macs:
-        raise ServiceValidationError(f"Device {device_id} is not a UniFi Play device")
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="not_a_play_device",
+            translation_placeholders={"device_id": device_id},
+        )
     # The device registry keys on MAC, so two entries for the same hardware -
     # a console one and a direct one - merge into a single registry device.
     # Prefer whichever coordinator actually holds a live connection, or the
@@ -54,7 +62,11 @@ def resolve_device(
                 fallback = (coordinator, dev_id)
     if fallback is not None:
         return fallback
-    raise ServiceValidationError(f"No live UniFi Play device for {device_id}")
+    raise ServiceValidationError(
+        translation_domain=DOMAIN,
+        translation_key="no_live_device",
+        translation_placeholders={"device_id": device_id},
+    )
 
 
 #: Keys the UniFi Play app sends in a dev_info entry. Everything else a device
@@ -99,7 +111,7 @@ def gs_to_dict(gs: UnifiPlayGroupState) -> dict[str, Any]:
     """Serialise a device-reported zone back to set_groups form, verbatim.
 
     Deliberately echoes the firmware-owned "host" flag rather than stripping
-    it. publish_zones() rebuilds the whole group list on every write, so this
+    it. The write path rebuilds the whole group list on every write, so this
     runs for zones that are not being edited; blanking their host would force a
     re-election on an untouched - possibly playing - zone every time the user
     renames a different one. Only the zone actually being written goes through
@@ -119,59 +131,6 @@ def gs_to_dict(gs: UnifiPlayGroupState) -> dict[str, Any]:
         # it (#22): set_groups accepts one, the groups event never echoes it
         # back inside a group, so it is write-only noise here too.
     }
-
-
-def move_zone_to_new_host(
-    coordinator: UnifiPlayCoordinator,
-    gs: UnifiPlayGroupState,
-    new_dev_info: list[dict[str, Any]],
-    removed_mac: str,
-) -> None:
-    """Hand a zone to a new host after its current host has been removed.
-
-    ``new_dev_info`` is the surviving device list with the removed device
-    already filtered out. Callers must have enforced the two-device zone
-    minimum first, so index 0 always exists. The list is mutated, so pass
-    copies - ``gs.dev_info`` is the live list the coordinator holds, and
-    editing it in place would corrupt cached state.
-
-    The successor is NOT named here. "host" is firmware-owned (see
-    dev_info_entry): the zone is rewritten without a host and the surviving
-    devices elect one, exactly as they do for a newly created zone. Writing
-    the flag ourselves is what breaks audio sync to members.
-
-    Because publish_zones sends the complete zone list to every device, the
-    handover is still a single write - the old host receives the same list as
-    everyone else, so there is no separate "strip it from the old host" step.
-
-    UNVERIFIED: re-election after a host is removed from a live zone has not
-    been confirmed on hardware, only re-election on zone creation has.
-
-    Raises ServiceValidationError when no device can be written to.
-    """
-    # If the removed device was the one broadcasting a wired source, that
-    # source leaves with it, so the zone falls back to streaming.
-    keep_wb = gs.wb_enable and mac_normalise(
-        gs.wb_device or gs.host_mac
-    ) != mac_normalise(removed_mac)
-
-    written = coordinator.publish_zones(
-        gs.group_id,
-        group_payload(
-            group_id=gs.group_id,
-            name=gs.name,
-            dev_info=new_dev_info,
-            group_index=gs.group_index,
-            broadcasting_mode=gs.broadcasting_mode,
-            wb_enable=keep_wb,
-            wb_device=gs.wb_device if keep_wb else "",
-            wb_input=gs.wb_input if keep_wb else "",
-        ),
-    )
-    if not written:
-        raise ServiceValidationError(
-            "No connected UniFi Play device to write the zone to"
-        )
 
 
 def group_payload(

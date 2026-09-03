@@ -153,8 +153,9 @@ class UnifiPlayEntity(CoordinatorEntity[UnifiPlayCoordinator]):
         client = self._connected_mqtt()
         if client is None:
             raise HomeAssistantError(
-                f"No MQTT connection to {self._device_state.device_name}. "
-                "The device may be offline, or unreachable on TCP 8883."
+                translation_domain=DOMAIN,
+                translation_key="device_not_connected",
+                translation_placeholders={"device": self._device_state.device_name},
             )
         return client
 

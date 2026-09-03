@@ -409,14 +409,22 @@ class UnifiPlayMqttClient:
             await loop.run_in_executor(None, self._client.loop, 0.5)
             await asyncio.sleep(0.01)
 
-    def publish_action(self, action: str, body: dict[str, Any] | None = None) -> None:
-        """Send a command to the device."""
+    def publish_action(self, action: str, body: dict[str, Any] | None = None) -> bool:
+        """Send a command to the device. True when it reached the socket.
+
+        The return value exists for the zone write path, which has to know
+        whether every required speaker was actually written to: a zone
+        document is replace-all per device, so a publish that was quietly
+        dropped leaves that speaker serving a copy that then competes on
+        merge and appears to revert the edit. Fire-and-forget callers ignore
+        it, which is correct for a volume change and not for a zone.
+        """
         if not self.is_connected:
             _LOGGER.warning("Cannot publish, MQTT not connected to %s", self._device_ip)
-            return
+            return False
         client = self._client
         if client is None:  # pragma: no cover - is_connected already proved it
-            return
+            return False
         _LOGGER.debug("Publishing action '%s' to %s", action, self._device_ip)
         header = {
             "id": str(uuid.uuid4()),
@@ -426,6 +434,7 @@ class UnifiPlayMqttClient:
         }
         payload = encode_binme(header, body or {})
         client.publish(self._pub_topic, payload)
+        return True
 
     def request_info(self) -> None:
         """Request current device info."""

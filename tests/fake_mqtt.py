@@ -120,6 +120,12 @@ class FakeDevice:
     firmware: str = ""
     #: Friendly name, answered to the ``info`` request the MQTT probe sends.
     name: str = "UniFi Play"
+    #: Report connected for this many more checks, then drop.
+    #:
+    #: Stages the one race the zone preflight cannot close: the socket going
+    #: between "every required speaker is connected" and the publish that
+    #: follows. Nothing else can produce a partial write.
+    drop_after_checks: int | None = None
     #: Answer an ``info`` request with ``{"deviceName": name}``.
     #:
     #: Real devices always do. It is off by default because most tests drive
@@ -274,6 +280,12 @@ class _FakeClient:
             self.on_connect(self, None, {}, _ReasonCode(code), None)
 
     def is_connected(self) -> bool:
+        device = self._device
+        if device is not None and device.drop_after_checks is not None:
+            if device.drop_after_checks <= 0:
+                self._connected = False
+            else:
+                device.drop_after_checks -= 1
         return self._connected
 
     def subscribe(self, topic: str, qos: int = 0) -> tuple[int, int]:

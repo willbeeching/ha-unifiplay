@@ -473,19 +473,95 @@
       "no_available_devices": "Every device is already in a zone. Remove one from its current zone before adding it here."
     },
     "error": {
-      "resolve_failed": "Could not find that device in the coordinator. Make sure it is online.",
-      "no_mqtt": "No MQTT connection to that device. Check that it is reachable.",
-      "already_member": "That device is already a member of this zone.",
-      "not_a_member": "That device is not a member of this zone.",
-      "device_in_other_zone": "One or more selected devices are already in another zone. A device can only be in one zone at a time — remove it from its current zone first.",
-      "input_not_on_device": "That input is not available on the device you selected. An Audio Port has eARC, Line In, S/PDIF and USB; a PowerAmp has eARC and Line In.",
-      "zone_needs_two_devices": "A zone needs at least 2 devices. Delete the zone instead of removing this device."
+      "input_not_on_device": "That input is not available on the speaker you selected. An Audio Port has eARC, Line In, S/PDIF and USB; a PowerAmp has eARC and Line In.",
+      "resolve_failed": "Could not find that speaker. Make sure it is online and try again.",
+      "zone_already_member": "{device} is already in {zone}.",
+      "zone_device_in_other_zone": "{device} is already in zone {zone}. A speaker can only be in one zone at a time — remove it from that one first.",
+      "zone_member_not_in_zone": "{device} is not in {zone}.",
+      "zone_members_offline": "Nothing was changed: {devices} cannot be reached. A zone definition is replaced wholesale on each speaker and does not spread between them, so writing to only the speakers that are online leaves the rest serving the old definition — which then wins later and appears to undo the change. Bring those speakers back online and try again.",
+      "zone_needs_two_devices": "A zone needs at least two speakers.",
+      "zone_not_found": "That zone no longer exists.",
+      "zone_publish_failed": "A speaker dropped its connection part-way through. Written to: {written}. Not written to: {failed}. Repeat the change once they are all back online.",
+      "zone_unknown_device": "One of the speakers you selected is not set up here.",
+      "zone_would_be_too_small": "Removing that speaker would leave fewer than two in the zone. Delete the zone instead.",
+      "zone_write_failed": "The change could not be applied. Check the Home Assistant log for details."
     }
   },
   "issues": {
     "mqtt_certificate_rejected": {
       "title": "{name} is offline",
       "description": "Home Assistant cannot talk to **{name}** ({ip}) over MQTT. The speaker rejected every client certificate this integration ships.\n\nFirmware 1.0.41 rotated the MQTT certificate authority, which previously left every entity unavailable with no device-level signal. This integration now tries each bundled generation on connect. If this repair is still open after a Home Assistant restart, the speaker is using a CA we do not have yet. Please open a GitHub issue with the speaker model and firmware version."
+    }
+  },
+  "exceptions": {
+    "device_not_connected": {
+      "message": "No MQTT connection to {device}. The speaker may be powered off, on a network Home Assistant cannot reach, or blocked on TCP 8883."
+    },
+    "device_state_unavailable": {
+      "message": "That speaker has not reported any state yet. It is discovered but not connected; wait for it to come online and try again."
+    },
+    "unknown_device": {
+      "message": "Unknown device {device_id}. It may have been removed."
+    },
+    "not_a_play_device": {
+      "message": "Device {device_id} is not a UniFi Play speaker."
+    },
+    "no_live_device": {
+      "message": "No UniFi Play speaker for device {device_id} is connected right now."
+    },
+    "unknown_entity": {
+      "message": "Unknown entity {entity_id}."
+    },
+    "not_a_zone_entity": {
+      "message": "{entity_id} is not a UniFi Play zone. Zone actions take the zone's own media player entity, not a speaker's."
+    },
+    "zone_not_found": {
+      "message": "That zone no longer exists. It may have been deleted from the Play app or from another Home Assistant action."
+    },
+    "zone_host_not_connected": {
+      "message": "The speaker hosting this zone is not connected, and this action has to go through it."
+    },
+    "zone_has_no_members": {
+      "message": "That zone has no speakers in it."
+    },
+    "zone_host_unknown": {
+      "message": "The speakers have not elected a host for this zone yet. This usually clears within about thirty seconds of the zone being created or changed."
+    },
+    "zone_unknown_device": {
+      "message": "No speaker with MAC {mac} is set up here, so it cannot be put in a zone."
+    },
+    "zone_needs_two_devices": {
+      "message": "A zone needs at least two speakers. Delete the zone instead of reducing it to one."
+    },
+    "zone_would_be_too_small": {
+      "message": "Removing that speaker would leave fewer than two in the zone. Delete the zone instead."
+    },
+    "zone_device_in_other_zone": {
+      "message": "{device} is already in zone {zone}. A speaker can only be in one zone at a time — remove it from that one first."
+    },
+    "zone_already_member": {
+      "message": "{device} is already in {zone}."
+    },
+    "zone_member_not_in_zone": {
+      "message": "{device} is not in {zone}."
+    },
+    "zone_members_offline": {
+      "message": "Not changing this zone: {devices} cannot be reached. A zone definition is replaced wholesale on each speaker and does not spread between them, so writing to only the speakers that are online leaves the rest serving the old definition — which then wins later and appears to undo the change. Nothing has been changed. Bring those speakers back online and try again."
+    },
+    "zone_publish_failed": {
+      "message": "A speaker dropped its connection part-way through this change. Written to: {written}. Not written to: {failed}. The zone may now differ between speakers; repeat the change once they are all back online to converge them."
+    },
+    "zone_source_not_on_device": {
+      "message": "{source} is not an input on the speaker broadcasting to {zone}. The list offers every input any speaker in the zone has, and they differ by model: an Audio Port has eARC, Line In, S/PDIF and USB; a PowerAmp has eARC and Line In."
+    },
+    "unknown_option": {
+      "message": "{option} is not a value this control accepts."
+    },
+    "eq_table_unavailable": {
+      "message": "The speaker has not reported its equaliser yet, so there is nothing to save. Wait a moment after it connects and try again."
+    },
+    "filename_traversal": {
+      "message": "That announcement filename is not allowed: it points outside the speaker's own clip storage."
     }
   }
 }

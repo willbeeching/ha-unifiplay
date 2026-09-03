@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 
-import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -47,29 +46,6 @@ PORT_MEMBER = zone_member(PORT_MAC, PORT_NAME, PORT_IP)
 THIRD_MEMBER = zone_member(THIRD_MAC, THIRD_NAME, THIRD_IP)
 
 
-@pytest.fixture
-async def synced(
-    hass: HomeAssistant,
-    setup_direct: MockConfigEntry,
-    amp: FakeDevice,
-    port: FakeDevice,
-    settle,
-    zone_events,
-):
-    """Both speakers have completed their first zone sync, reporting one zone.
-
-    This is the state everything after startup happens from: the initial
-    sync is silent by design, so a test that wants to observe an event has to
-    get past it first.
-    """
-    body = groups_body()
-    amp.emit("groups", body)
-    port.emit("groups", body)
-    await settle(hass)
-    assert zone_events == [], "the first sync of each device must be silent"
-    return setup_direct
-
-
 def _types(events) -> list[str]:
     return [event_type for event_type, _ in events]
 
@@ -101,7 +77,7 @@ async def test_the_first_sync_is_silent(
 
 async def test_a_speaker_connecting_later_announces_nothing(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     third: FakeDevice,
     udp_discovery,
     settle,
@@ -134,7 +110,7 @@ async def test_a_speaker_connecting_later_announces_nothing(
     await settle(hass)
 
     assert zone_events == []
-    coordinator = entry_coordinator(hass, synced)
+    coordinator = entry_coordinator(hass, synced_zone)
     assert set(coordinator.groups) == {ZONE_ID, "another-zone"}
 
 
@@ -143,7 +119,7 @@ async def test_a_speaker_connecting_later_announces_nothing(
 
 async def test_two_speakers_reporting_the_same_rename_fire_one_event(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -165,7 +141,7 @@ async def test_two_speakers_reporting_the_same_rename_fire_one_event(
 
 async def test_a_member_joining_fires_one_event_from_two_reports(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -184,7 +160,7 @@ async def test_a_member_joining_fires_one_event_from_two_reports(
 
 async def test_a_member_leaving_fires_one_event(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -203,7 +179,7 @@ async def test_a_member_leaving_fires_one_event(
 
 async def test_a_new_zone_fires_one_created_event(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -233,7 +209,7 @@ async def test_a_new_zone_fires_one_created_event(
 
 async def test_a_deleted_zone_fires_one_deleted_event(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -249,7 +225,7 @@ async def test_a_deleted_zone_fires_one_deleted_event(
 
 async def test_one_speaker_dropping_a_zone_is_not_a_deletion(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     port: FakeDevice,
     settle,
     zone_events,
@@ -264,7 +240,7 @@ async def test_one_speaker_dropping_a_zone_is_not_a_deletion(
     await settle(hass)
 
     assert zone_events == []
-    coordinator = entry_coordinator(hass, synced)
+    coordinator = entry_coordinator(hass, synced_zone)
     assert ZONE_ID in coordinator.groups
 
 
@@ -273,7 +249,7 @@ async def test_one_speaker_dropping_a_zone_is_not_a_deletion(
 
 async def test_an_identical_payload_fires_nothing(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -289,7 +265,7 @@ async def test_an_identical_payload_fires_nothing(
 
 async def test_a_reordered_member_list_fires_nothing(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     settle,
     zone_events,
@@ -302,7 +278,7 @@ async def test_a_reordered_member_list_fires_nothing(
 
 async def test_a_host_election_alone_fires_nothing(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -327,7 +303,7 @@ async def test_a_host_election_alone_fires_nothing(
 
 async def test_the_hosts_copy_wins(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -340,13 +316,13 @@ async def test_the_hosts_copy_wins(
     port.emit("groups", groups_body(name=ZONE_NAME))  # member, stale
     await settle(hass)
 
-    coordinator = entry_coordinator(hass, synced)
+    coordinator = entry_coordinator(hass, synced_zone)
     assert coordinator.groups[ZONE_ID].name == "Ground Floor"
 
 
 async def test_a_stale_copy_arriving_last_does_not_revert(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -360,14 +336,14 @@ async def test_a_stale_copy_arriving_last_does_not_revert(
     port.emit("groups", groups_body(name=ZONE_NAME))  # the member catching up
     await settle(hass)
 
-    coordinator = entry_coordinator(hass, synced)
+    coordinator = entry_coordinator(hass, synced_zone)
     assert coordinator.groups[ZONE_ID].name == "Ground Floor"
     assert _types(zone_events) == [EVENT_ZONE_RENAMED]
 
 
 async def test_two_devices_claiming_host_resolve_the_same_way_every_time(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -390,7 +366,7 @@ async def test_two_devices_claiming_host_resolve_the_same_way_every_time(
     amp.emit("groups", amp_claim)
     port.emit("groups", port_claim)
     await settle(hass)
-    coordinator = entry_coordinator(hass, synced)
+    coordinator = entry_coordinator(hass, synced_zone)
     first = coordinator.groups[ZONE_ID].name
 
     # Same inputs, opposite arrival order.
@@ -402,7 +378,7 @@ async def test_two_devices_claiming_host_resolve_the_same_way_every_time(
 
 async def test_a_zone_with_no_elected_host_still_resolves(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -415,14 +391,14 @@ async def test_a_zone_with_no_elected_host_still_resolves(
     port.emit("groups", hostless)
     await settle(hass)
 
-    coordinator = entry_coordinator(hass, synced)
+    coordinator = entry_coordinator(hass, synced_zone)
     assert coordinator.groups[ZONE_ID].host_mac == ""
     assert coordinator.groups[ZONE_ID].name == ZONE_NAME
 
 
 async def test_a_conflict_is_logged_once_and_recovery_once(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -452,7 +428,7 @@ async def test_a_conflict_is_logged_once_and_recovery_once(
 
 async def test_a_host_election_is_not_reported_as_a_conflict(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -479,7 +455,7 @@ async def test_a_host_election_is_not_reported_as_a_conflict(
 
 async def test_the_zone_entity_reads_the_canonical_state(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
@@ -498,13 +474,13 @@ async def test_the_zone_entity_reads_the_canonical_state(
     port.emit("groups", renamed)
     await settle(hass)
 
-    coordinator = entry_coordinator(hass, synced)
+    coordinator = entry_coordinator(hass, synced_zone)
     assert coordinator.groups[ZONE_ID].name == "Ground Floor"
 
 
 async def test_a_malformed_group_entry_is_skipped_not_fatal(
     hass: HomeAssistant,
-    synced: MockConfigEntry,
+    synced_zone: MockConfigEntry,
     amp: FakeDevice,
     settle,
 ) -> None:
@@ -514,5 +490,5 @@ async def test_a_malformed_group_entry_is_skipped_not_fatal(
     amp.emit("groups", body)
     await settle(hass)
 
-    coordinator = entry_coordinator(hass, synced)
+    coordinator = entry_coordinator(hass, synced_zone)
     assert set(coordinator.groups) == {ZONE_ID}

@@ -27,9 +27,10 @@ builder for a *written* zone emits neither key.
 Not covered here
 ----------------
 ``gs_to_dict`` deliberately DOES echo ``host``. It re-serialises zones the
-devices reported, for the sibling entries publish_zones resends untouched;
-stripping their elected host would force a re-election on an unrelated - and
-possibly playing - zone every time the user edits a different one.
+devices reported, for the sibling entries the write path resends untouched
+alongside the zone being edited; stripping their elected host would force a
+re-election on an unrelated - and possibly playing - zone every time the user
+edits a different one.
 """
 
 from __future__ import annotations

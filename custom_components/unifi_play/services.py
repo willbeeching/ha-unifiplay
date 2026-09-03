@@ -20,13 +20,8 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
-from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState, UnifiPlayGroupState
-from .helpers import (
-    dev_info_entry,
-    mac_normalise,
-    move_zone_to_new_host,
-    resolve_device,
-)
+from .coordinator import UnifiPlayCoordinator, UnifiPlayDeviceState
+from .helpers import resolve_device
 from .mqtt_client import UnifiPlayMqttClient
 
 ATTR_DEVICE_ID = "device_id"
@@ -169,7 +164,12 @@ def _client(hass: HomeAssistant, call: ServiceCall) -> UnifiPlayMqttClient:
     # adds it before dialling out, and publish_action drops commands silently
     # while disconnected (#14).
     if client is None or not client.is_connected:
-        raise ServiceValidationError("No MQTT connection to that device")
+        state = (coordinator.data or {}).get(dev_id)
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="device_not_connected",
+            translation_placeholders={"device": state.device_name if state else dev_id},
+        )
     return client
 
 
@@ -180,15 +180,25 @@ def _resolve_zone(
     registry = er.async_get(hass)
     entry = registry.async_get(entity_id)
     if entry is None:
-        raise ServiceValidationError(f"Unknown entity: {entity_id}")
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="unknown_entity",
+            translation_placeholders={"entity_id": entity_id},
+        )
     uid = entry.unique_id or ""
     if not uid.startswith("unifi_play_zone_"):
-        raise ServiceValidationError(f"{entity_id} is not a UniFi Play zone entity")
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="not_a_zone_entity",
+            translation_placeholders={"entity_id": entity_id},
+        )
     group_id = uid[len("unifi_play_zone_") :]
     for coordinator in hass.data.get(DOMAIN, {}).values():
         if group_id in coordinator.groups:
             return coordinator, group_id
-    raise ServiceValidationError(f"Zone {group_id} not found in any active coordinator")
+    raise ServiceValidationError(
+        translation_domain=DOMAIN, translation_key="zone_not_found"
+    )
 
 
 def _zone_host_client(
@@ -199,7 +209,9 @@ def _zone_host_client(
     # while the socket is down, so a zone write would report success and
     # never reach the host (#14).
     if client is None or not client.is_connected:
-        raise ServiceValidationError("No MQTT connection to zone host")
+        raise ServiceValidationError(
+            translation_domain=DOMAIN, translation_key="zone_host_not_connected"
+        )
     return client
 
 
@@ -212,7 +224,9 @@ def async_register_services(hass: HomeAssistant) -> None:
         coordinator, dev_id = resolve_device(hass, call.data[ATTR_DEVICE_ID])
         state = (coordinator.data or {}).get(dev_id)
         if state is None:
-            raise ServiceValidationError("Device data not yet available")
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="device_state_unavailable"
+            )
         return state
 
     async def play_announcement(call: ServiceCall) -> None:
@@ -278,7 +292,9 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def save_eq_preset(call: ServiceCall) -> None:
         state = _state(call)
         if not state.eq_table:
-            raise ServiceValidationError("No EQ table reported by the device yet")
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="eq_table_unavailable"
+            )
         _client(hass, call).save_eq_preset(
             call.data["name"], {k: float(v) for k, v in state.eq_table.items()}
         )
@@ -290,6 +306,23 @@ def async_register_services(hass: HomeAssistant) -> None:
         _client(hass, call).rename_eq_preset(call.data["name"], call.data["new_name"])
 
     # --- Zone management ---
+    #
+    # Every one of these delegates to coordinator.zones, which preflights the
+    # speakers, publishes the complete document to each of them and returns a
+    # result. None of them build a zone payload or reach for an MQTT client
+    # themselves: that is what let six callers each get the preflight
+    # slightly differently wrong.
+
+    def _zone_device_mac(call: ServiceCall, key: str = ATTR_DEVICE_ID) -> str:
+        """Resolve a Home Assistant device id to a speaker MAC."""
+        coordinator, dev_id = resolve_device(hass, call.data[key])
+        state = (coordinator.data or {}).get(dev_id)
+        if state is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="device_state_unavailable",
+            )
+        return state.mac
 
     async def create_zone(call: ServiceCall) -> None:
         host_coordinator, host_dev_id = resolve_device(
@@ -297,175 +330,46 @@ def async_register_services(hass: HomeAssistant) -> None:
         )
         host_state = (host_coordinator.data or {}).get(host_dev_id)
         if host_state is None:
-            raise ServiceValidationError("Host device data not yet available")
-        host_client = host_coordinator.get_mqtt_client(host_dev_id)
-        if host_client is None:
-            raise ServiceValidationError("No MQTT connection to host device")
-
-        # Two maps across all coordinators, because the rule differs by role:
-        #  - member_mac_to_zone: appears as a non-host member somewhere. A
-        #    device may host more than one zone, so only a MEMBER appearance
-        #    disqualifies it from hosting a new one.
-        #  - any_mac_to_zone: appears in any role. Joining as a member is
-        #    disqualified by either, otherwise a device hosting zone A could
-        #    also be made a member of zone B and end up in two zones - the
-        #    thing this check exists to prevent.
-        member_mac_to_zone: dict[str, str] = {}
-        any_mac_to_zone: dict[str, str] = {}
-        for coord in hass.data.get(DOMAIN, {}).values():
-            for gs in coord.groups.values():
-                for dev in gs.dev_info:
-                    m = mac_normalise(dev.get("mac", ""))
-                    if not m:
-                        continue
-                    any_mac_to_zone[m] = gs.name
-                    if not dev.get("host"):
-                        member_mac_to_zone[m] = gs.name
-
-        host_mac = mac_normalise(host_state.mac)
-        if host_mac in member_mac_to_zone:
             raise ServiceValidationError(
-                f"'{host_state.name}' is already a member of zone "
-                f"'{member_mac_to_zone[host_mac]}'. Remove it from that zone first."
+                translation_domain=DOMAIN,
+                translation_key="device_state_unavailable",
             )
-
-        # Create the zone with no host designated - the "host" key is OMITTED
-        # entirely, not set false (see dev_info_entry: the app never sends it,
-        # and "host": false does not work either). The firmware elects.
-        # The firmware elects its own host and writes the flag back: a zone
-        # created in the Play app is reported with a fully populated dev_info
-        # and no host at creation, and only names one on a later read
-        # (observed on five UPL-PORTs, fw 1.1.10). Pre-designating a host is
-        # the one thing an app-made zone never does, and the symptom of doing
-        # it is a zone every device agrees on that only ever sounds on the
-        # host - the member registers membership and stays silent, over
-        # AirPlay and Spotify Connect alike. See docs/api.md.
-        dev_info = [dev_info_entry(host_state)]
+        macs = [host_state.mac]
         for member_device_id in call.data["member_device_ids"]:
             m_coordinator, m_dev_id = resolve_device(hass, member_device_id)
             m_state = (m_coordinator.data or {}).get(m_dev_id)
-            if m_state is None or mac_normalise(m_state.mac) == host_mac:
-                continue
-            m_mac = mac_normalise(m_state.mac)
-            if m_mac in any_mac_to_zone:
+            if m_state is None:
                 raise ServiceValidationError(
-                    f"'{m_state.name}' is already in zone '{any_mac_to_zone[m_mac]}'. "
-                    "A device can only be in one zone at a time — remove it first."
+                    translation_domain=DOMAIN,
+                    translation_key="device_state_unavailable",
                 )
-            dev_info.append(dev_info_entry(m_state))
-
-        host_coordinator.update_zone(
-            group_id=str(uuid.uuid4()),
-            name=call.data["name"],
-            dev_info=dev_info,
-        )
+            macs.append(m_state.mac)
+        # No host is designated at creation: the "host" key is omitted
+        # entirely, not set false. The firmware elects one and writes the
+        # flag back. Pre-designating a host is the one thing an app-made zone
+        # never does, and the symptom is a zone every speaker agrees on that
+        # only ever sounds in one room. See docs/api.md.
+        host_coordinator.zones.create(name=call.data["name"], member_macs=macs)
 
     async def delete_zone(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
-        coordinator.delete_zone(group_id)
+        coordinator.zones.delete(group_id)
 
     async def add_zone_member(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
-        gs: UnifiPlayGroupState = coordinator.groups[group_id]
-        m_coordinator, m_dev_id = resolve_device(hass, call.data[ATTR_DEVICE_ID])
-        m_state = (m_coordinator.data or {}).get(m_dev_id)
-        if m_state is None:
-            raise ServiceValidationError("Member device data not yet available")
-
-        if any(
-            mac_normalise(d.get("mac", "")) == mac_normalise(m_state.mac)
-            for d in gs.dev_info
-        ):
-            raise ServiceValidationError(f"{m_state.name} is already in this zone")
-
-        m_mac = mac_normalise(m_state.mac)
-        for coord in hass.data.get(DOMAIN, {}).values():
-            for other_gs in coord.groups.values():
-                if other_gs.group_id == group_id:
-                    continue
-                for dev in other_gs.dev_info:
-                    if mac_normalise(dev.get("mac", "")) == m_mac:
-                        raise ServiceValidationError(
-                            f"'{m_state.name}' is already in zone '{other_gs.name}'. "
-                            "A device can only be in one zone at a time — remove it first."
-                        )
-
-        new_dev_info = list(gs.dev_info) + [dev_info_entry(m_state)]
-        coordinator.update_zone(
-            group_id=gs.group_id,
-            name=gs.name,
-            dev_info=new_dev_info,
-            group_index=gs.group_index,
-            broadcasting_mode=gs.broadcasting_mode,
-            wb_enable=gs.wb_enable,
-            wb_device=gs.wb_device,
-            wb_input=gs.wb_input,
-        )
+        coordinator.zones.add_member(group_id, _zone_device_mac(call))
 
     async def remove_zone_member(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
-        gs: UnifiPlayGroupState = coordinator.groups[group_id]
-        m_coordinator, m_dev_id = resolve_device(hass, call.data[ATTR_DEVICE_ID])
-        m_state = (m_coordinator.data or {}).get(m_dev_id)
-        if m_state is None:
-            raise ServiceValidationError("Member device data not yet available")
-
-        target = mac_normalise(m_state.mac)
-        new_dev_info = [
-            dict(d) for d in gs.dev_info if mac_normalise(d.get("mac", "")) != target
-        ]
-        if len(new_dev_info) == len(gs.dev_info):
-            raise ServiceValidationError(f"{m_state.name} is not in this zone")
-        if len(new_dev_info) < 2:
-            raise ServiceValidationError(
-                "A zone needs at least 2 devices — delete the zone instead"
-            )
-
-        if target != mac_normalise(gs.host_mac):
-            coordinator.update_zone(
-                group_id=gs.group_id,
-                name=gs.name,
-                dev_info=new_dev_info,
-                group_index=gs.group_index,
-                broadcasting_mode=gs.broadcasting_mode,
-                wb_enable=gs.wb_enable,
-                wb_device=gs.wb_device,
-                wb_input=gs.wb_input,
-            )
-            return
-
-        # Removing the device that currently hosts: hand the role to another
-        # member. Shared with the config flow's remove step so the two cannot
-        # drift apart; raises ServiceValidationError if either end is offline.
-        move_zone_to_new_host(coordinator, gs, new_dev_info, target)
+        coordinator.zones.remove_member(group_id, _zone_device_mac(call))
 
     async def rename_zone(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
-        gs: UnifiPlayGroupState = coordinator.groups[group_id]
-        coordinator.update_zone(
-            group_id=gs.group_id,
-            name=call.data["name"],
-            dev_info=gs.dev_info,
-            group_index=gs.group_index,
-            broadcasting_mode=gs.broadcasting_mode,
-            wb_enable=gs.wb_enable,
-            wb_device=gs.wb_device,
-            wb_input=gs.wb_input,
-        )
+        coordinator.zones.rename(group_id, call.data["name"])
 
     async def set_zone_index(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
-        gs: UnifiPlayGroupState = coordinator.groups[group_id]
-        coordinator.update_zone(
-            group_id=gs.group_id,
-            name=gs.name,
-            dev_info=gs.dev_info,
-            group_index=call.data["group_index"],
-            broadcasting_mode=gs.broadcasting_mode,
-            wb_enable=gs.wb_enable,
-            wb_device=gs.wb_device,
-            wb_input=gs.wb_input,
-        )
+        coordinator.zones.set_index(group_id, call.data["group_index"])
 
     async def play_zone_announcement(call: ServiceCall) -> None:
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
@@ -476,7 +380,9 @@ def async_register_services(hass: HomeAssistant) -> None:
         # resolve without a base (../evil stays ../evil after normpath).
         safe_name = posixpath.normpath(raw_name.lstrip("/"))
         if ".." in safe_name.split("/"):
-            raise ServiceValidationError("Invalid filename: path traversal not allowed")
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="filename_traversal"
+            )
         length = call.data["length"]
         if not length:
             host_state = coordinator.get_zone_host_state(group_id)
@@ -491,9 +397,26 @@ def async_register_services(hass: HomeAssistant) -> None:
         client.play_announcement(safe_name, length, zone_play=True)
 
     async def stop_zone_announcement(call: ServiceCall) -> None:
+        """Stop an announcement on every member, or say which cannot be reached.
+
+        Skipping the offline members and reporting success leaves an
+        announcement audibly playing in a room the user just silenced.
+        """
         coordinator, group_id = _resolve_zone(hass, call.data["entity_id"])
-        for _, _, client in coordinator.get_zone_members(group_id):
-            if client:
+        members = coordinator.get_zone_members(group_id)
+        offline = [
+            state.device_name
+            for _, state, client in members
+            if client is None or not client.is_connected
+        ]
+        if offline:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="zone_members_offline",
+                translation_placeholders={"devices": ", ".join(offline)},
+            )
+        for _, _, client in members:
+            if client is not None:
                 client.stop_announcement()
 
     handlers: list[tuple[str, _ServiceHandler, vol.Schema]] = [

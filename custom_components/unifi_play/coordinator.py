@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.event import async_call_later
@@ -32,6 +32,7 @@ from .const import (
 )
 from .discovery import async_resolve_direct
 from .mqtt_client import MqttCertificateRejected, UnifiPlayMqttClient
+from .zone_writer import ZoneWriter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -484,6 +485,11 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # out, rather than on every event for as long as it lasts.
         self._conflicted_zones: set[str] = set()
         self.groups: dict[str, UnifiPlayGroupState] = {}
+        self._zone_writer = ZoneWriter(self)
+        # Cancel handles for the post-write zone re-reads, so shutdown can
+        # take them down rather than leaving them to fire into a coordinator
+        # that no longer has any clients.
+        self._host_reread_cancels: list[CALLBACK_TYPE] = []
 
     async def _async_update_data(self) -> dict[str, UnifiPlayDeviceState]:
         """Fetch the device list and return current state dict.
@@ -914,66 +920,37 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 },
             )
 
-    def update_zone(
-        self,
-        *,
-        group_id: str,
-        name: str,
-        dev_info: list[dict[str, Any]],
-        group_index: int = 0,
-        broadcasting_mode: str = "zone_only",
-        wb_enable: bool = False,
-        wb_device: str = "",
-        wb_input: str = "",
-    ) -> list[str]:
-        """Create or update one zone across every connected device.
+    @property
+    def zones(self) -> ZoneWriter:
+        """The one path that writes zone topology.
 
-        Callers no longer assemble sibling_groups: publish_zones rebuilds the
-        full list from coordinator state, so zones on other hosts survive
-        automatically rather than depending on each caller remembering to
-        resend them.
+        Every mutation - create, rename, reorder, membership, broadcast
+        source, delete - goes through here. A caller that publishes
+        ``set_groups`` itself skips the preflight, and a zone written to some
+        speakers and not others forms, competes on merge and reverts minutes
+        later with nothing in the log.
         """
-        from .helpers import group_payload
+        return self._zone_writer
 
-        return self.publish_zones(
-            group_id,
-            group_payload(
-                group_id=group_id,
-                name=name,
-                dev_info=dev_info,
-                group_index=group_index,
-                broadcasting_mode=broadcasting_mode,
-                wb_enable=wb_enable,
-                wb_device=wb_device,
-                wb_input=wb_input,
-            ),
-        )
+    def device_zone_cache(self) -> dict[str, dict[str, UnifiPlayGroupState]]:
+        """Each device's own last-reported zone list, keyed by device id.
 
-    def delete_zone(self, group_id: str) -> list[str]:
-        """Remove one zone from every connected device."""
-        return self.publish_zones(group_id, None)
+        Read by the write path to work out whose cached copy a change would
+        leave stale. Kept per device rather than merged because a copy that
+        is about to go stale is a property of the speaker holding it.
+        """
+        return self._device_groups
 
-    def publish_zones(self, group_id: str, updated: dict[str, Any] | None) -> list[str]:
-        """Write a zone change out to EVERY connected device.
+    def zone_documents(
+        self, group_id: str, updated: dict[str, Any] | None
+    ) -> list[dict[str, Any]]:
+        """The complete zone list to write, with one zone replaced or removed.
 
-        ``updated`` is the new wire dict for the zone, or None to delete it.
-        Returns the MACs actually written to.
-
-        set_groups is replace-all *per device*, and every device carries a copy
-        of every zone - including zones it is not a member of. Publishing only
-        to the zone's host therefore leaves every other device serving its
-        previous copy indefinitely: nothing propagates between devices. Those
-        stale copies then compete in _update_from_groups, which is how an
-        accepted edit could appear to revert on the next resync.
-
-        Verified on five UPL-PORTs (fw 1.1.10): after a host handover written
-        only to the new host, three of four devices still named the old host;
-        re-publishing the full list to all five converged them, and the three
-        zone members held that state across a reload.
-
-        Sending the complete list to everyone also means a zone changing hands
-        needs no separate "strip it from the old host" write - the old host is
-        simply given the same list as everyone else.
+        ``set_groups`` is replace-all per device, so every write carries the
+        whole list. Rebuilding it from coordinator state here means zones the
+        caller is not touching survive without each caller remembering to
+        resend them - which is how a rename once dropped every other zone on
+        the speaker it was written to.
         """
         from .helpers import gs_to_dict
 
@@ -988,47 +965,57 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 groups.append(updated)
         if updated is not None and not replaced:
             groups.append(updated)  # a zone being created
+        return groups
 
-        written: list[str] = []
-        for dev_id, client in self._mqtt_clients.items():
-            if client is None or not client.is_connected:
-                continue
-            client.publish_action("set_groups", {"groups": groups})
-            state = self._device_states.get(dev_id)
-            if state is not None:
-                written.append(state.mac)
-        _LOGGER.debug(
-            "publish_zones: %d zone(s) -> %d device(s) %s",
-            len(groups),
-            len(written),
-            written,
-        )
-        if written:
-            self._schedule_host_election_reread()
-        return written
+    @callback
+    def _cancel_host_reread(self) -> None:
+        """Drop any pending post-write zone re-reads.
 
-    def _schedule_host_election_reread(self) -> None:
+        A re-read that fires thirty seconds after the entry unloaded is a
+        task outliving its owner, and a reload that leaves the old one
+        running ends up with two of everything.
+        """
+        for cancel in self._host_reread_cancels:
+            cancel()
+        self._host_reread_cancels.clear()
+
+    def schedule_host_election_reread(self) -> None:
         """Re-read zones shortly after a write, to learn the elected host.
 
-        "host" is firmware-owned: the device elects one after a set_groups
-        write and does NOT push a groups event to announce it. Without asking
+        "host" is firmware-owned: the speakers elect one after a set_groups
+        write and do NOT push a groups event to announce it. Without asking
         again, host_mac stays empty until the next reconnect, and every
-        host-routed operation on a freshly written zone fails - rename, add or
-        remove a member, set the source, reorder, or creating a second zone on
-        the same speaker.
+        host-routed operation on a freshly written zone fails - rename, add
+        or remove a member, set the source, reorder, or creating a second
+        zone on the same speaker.
 
-        Re-reads are cheap (a groups request per connected device) and
+        It is also the only confirmation the protocol offers that a write
+        landed: there is no acknowledgement for set_groups, so the groups
+        event that follows is what tells you the speakers agree.
+
+        Re-reads are cheap (a groups request per connected speaker) and
         idempotent, so this fires a short series rather than betting on one
         delay being right for every firmware.
         """
 
+        # A second write supersedes the first: the series is about learning
+        # the host of the zone last written, so restarting it is both cheaper
+        # and more correct than stacking two sets of timers.
+        self._cancel_host_reread()
+
+        @callback
         def _reread(_now: datetime | None = None) -> None:
             for client in self._mqtt_clients.values():
                 if client is not None and client.is_connected:
                     client.request_groups()
 
         for delay in HOST_ELECTION_REREAD_DELAYS:
-            async_call_later(self.hass, delay, _reread)
+            # Held so shutdown can cancel them. A re-read that fires thirty
+            # seconds after the entry unloaded is a task outliving its owner,
+            # which is how a reload ends up with two of everything.
+            self._host_reread_cancels.append(
+                async_call_later(self.hass, delay, _reread)
+            )
 
     def get_mqtt_client(self, device_id: str) -> UnifiPlayMqttClient | None:
         """Return the MQTT client for a device."""
@@ -1113,6 +1100,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         """Disconnect all MQTT clients."""
         for state in self._device_states.values():
             self._async_delete_cert_issue(state.mac)
+        self._cancel_host_reread()
         for client in self._mqtt_clients.values():
             await client.disconnect()
         self._mqtt_clients.clear()

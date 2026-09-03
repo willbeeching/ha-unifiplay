@@ -17,6 +17,7 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -485,50 +486,87 @@ class UnifiPlayZonePlayer(CoordinatorEntity[UnifiPlayCoordinator], MediaPlayerEn
         host_state = self.coordinator.get_zone_host_state(self._group_id)
         return host_state.muted if host_state else None
 
+    def _require_members(self) -> list[tuple[UnifiPlayDeviceState, Any]]:
+        """Every member of this zone with a live connection, or refuse.
+
+        A zone command that reaches three speakers out of four and reports
+        success leaves one room at the old volume, or still announcing, with
+        nothing to say so. Refusing is worse for exactly one case - wanting
+        to turn down the speakers that *are* reachable - and better for every
+        other, because the failure is visible instead of audible.
+        """
+        gs = self._group
+        if gs is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="zone_not_found"
+            )
+        members = self.coordinator.get_zone_members(self._group_id)
+        if not members:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="zone_has_no_members"
+            )
+        offline = [
+            state.device_name
+            for _, state, client in members
+            if client is None or not client.is_connected
+        ]
+        if offline:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="zone_members_offline",
+                translation_placeholders={"devices": ", ".join(offline)},
+            )
+        return [(state, client) for _, state, client in members if client is not None]
+
     async def async_set_volume_level(self, volume: float) -> None:
-        vol = int(volume * 100)
-        for _, _, client in self.coordinator.get_zone_members(self._group_id):
-            if client:
-                client.set_volume(vol)
+        level = int(volume * 100)
+        for _state, client in self._require_members():
+            client.set_volume(level)
 
     async def async_mute_volume(self, mute: bool) -> None:
-        for _, state, client in self.coordinator.get_zone_members(self._group_id):
+        """Software mute across the zone.
+
+        The optimistic flags are set only after every member has been proved
+        reachable: setting them first left a speaker showing muted while
+        still playing, because the command that would have muted it was
+        never sent.
+        """
+        members = self._require_members()
+        for state, client in members:
             if mute:
                 if state.volume > 0:
                     state.mute_restore = state.volume
                 state.muted = True
+                # Until the speaker reports volume 0 back, ignore any info
+                # event still carrying the pre-mute level.
                 state.mute_confirmed = False
-                if client is None:
-                    _LOGGER.debug(
-                        "Zone mute: no MQTT client for %s, state flagged but no command sent",
-                        state.name,
-                    )
-                    continue
                 client.set_mute(True)
             else:
                 state.muted = False
-                if client is None:
-                    continue
                 client.set_mute(False, restore_volume=state.mute_restore or 20)
         self.async_write_ha_state()
 
     async def async_volume_up(self) -> None:
+        members = self._require_members()
         host_state = self.coordinator.get_zone_host_state(self._group_id)
         if host_state is None:
-            return
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="zone_host_unknown"
+            )
         new_vol = min(host_state.volume + 5, host_state.vol_limit)
-        for _, _, client in self.coordinator.get_zone_members(self._group_id):
-            if client:
-                client.set_volume(new_vol)
+        for _state, client in members:
+            client.set_volume(new_vol)
 
     async def async_volume_down(self) -> None:
+        members = self._require_members()
         host_state = self.coordinator.get_zone_host_state(self._group_id)
         if host_state is None:
-            return
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="zone_host_unknown"
+            )
         new_vol = max(host_state.volume - 5, 0)
-        for _, _, client in self.coordinator.get_zone_members(self._group_id):
-            if client:
-                client.set_volume(new_vol)
+        for _state, client in members:
+            client.set_volume(new_vol)
 
     def _member_states(self) -> list[UnifiPlayDeviceState]:
         """Device states for the speakers in this zone."""
@@ -601,61 +639,43 @@ class UnifiPlayZonePlayer(CoordinatorEntity[UnifiPlayCoordinator], MediaPlayerEn
         }
 
     async def async_select_source(self, source: str) -> None:
+        """Switch the zone between streaming and a broadcast wired input.
+
+        Two writes to two different places, and the order matters: the zone
+        document goes to every required speaker first, and only once that has
+        succeeded does the input switch go to the speaker that will actually
+        broadcast. Doing it the other way round leaves a speaker on an input
+        nothing is listening to when the zone write is refused.
+        """
         gs = self._group
         if gs is None:
-            return
-        client = self.coordinator.get_host_mqtt_client(self._group_id)
-        if not client:
-            _LOGGER.warning("No MQTT client found for zone host %s", gs.host_mac)
-            return
-        # Resolved against the source device's own platform: the same label
-        # is a different device value on an Audio Port than on a PowerAmp.
-        # "Streaming" maps to nothing, which is what disables broadcasting.
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="zone_not_found"
+            )
+
         if source == WB_STREAMING_LABEL:
-            device_val = ""
-        else:
-            # source_list is the union across members, so a label valid for
-            # one device can be absent on the one currently broadcasting.
-            # Refuse rather than fall through to "" - that would read as
-            # "Streaming" and silently drop the whole zone off its wired
-            # source instead of rejecting an unsupported request.
-            device_val = source_value(self._source_platform(), source) or ""
-            if not device_val:
-                _LOGGER.warning(
-                    "Zone %s: source %r is not available on the broadcasting "
-                    "device; leaving the zone unchanged",
-                    gs.name,
-                    source,
-                )
-                return
-        wb_enable = bool(device_val)
-        # Preserve whichever zone member was set as the broadcast source;
-        # fall back to host only if no device has been chosen yet.
-        source_mac = gs.wb_device or gs.host_mac
-        # The zone write and the input switch go to different places: the
-        # zone goes to every device, but the input switch belongs on the one
-        # that will actually broadcast. Sending both to the host would switch
-        # the wrong device's input.
-        self.coordinator.update_zone(
-            group_id=gs.group_id,
-            name=gs.name,
-            dev_info=gs.dev_info,
-            group_index=gs.group_index,
-            broadcasting_mode=gs.broadcasting_mode,
-            wb_enable=wb_enable,
-            wb_device=source_mac if wb_enable else "",
+            self.coordinator.zones.clear_broadcast_source(gs.group_id)
+            return
+
+        # source_list is the union across members, so a label valid for one
+        # speaker can be absent on the one currently broadcasting. Refuse
+        # rather than fall through to "": that reads as Streaming and would
+        # silently drop the whole zone off its wired source instead of
+        # rejecting a request the hardware cannot serve.
+        device_val = source_value(self._source_platform(), source)
+        if not device_val:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="zone_source_not_on_device",
+                translation_placeholders={"source": source, "zone": gs.name},
+            )
+        # Preserve whichever member was set as the broadcast source; fall
+        # back to the host only if none has been chosen yet.
+        self.coordinator.zones.set_broadcast_source(
+            gs.group_id,
+            source_mac=gs.wb_device or gs.host_mac,
             wb_input=device_val,
         )
-        source_client = self.coordinator.get_mqtt_client_for_mac(source_mac)
-        if source_client is not None:
-            source_client.set_source(device_val or "streaming")
-        else:
-            _LOGGER.warning(
-                "Zone %s: broadcast device %s is offline, so its input was not "
-                "switched; the zone state was still updated",
-                gs.name,
-                source_mac,
-            )
 
     @callback
     def _handle_coordinator_update(self) -> None:
