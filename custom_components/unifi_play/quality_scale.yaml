@@ -1,0 +1,263 @@
+# Home Assistant Integration Quality Scale.
+#
+# This is a custom integration, so nothing here is checked by hassfest and no
+# core reviewer has signed it off. It is kept because the rules are a decent
+# checklist regardless of who is reading them, and because a rule marked
+# `done` with no evidence is worse than no file at all. Every status below is
+# either something a test asserts or something you can read in the code, and
+# the ones that are not met say so rather than being quietly marked exempt.
+#
+# Statuses: done | todo | exempt (with a reason).
+
+rules:
+  # ── Bronze ─────────────────────────────────────────────────────────────
+  action-setup:
+    status: done
+    comment: |
+      Registered in async_setup for the whole run, not per entry. Two entries
+      would otherwise re-register every handler against the second entry's
+      closure, and unloading one would take the actions away from the other.
+      tests/test_setup.py::test_actions_survive_an_unload.
+  appropriate-polling:
+    status: done
+    comment: |
+      iot_class is local_push: state arrives over MQTT. The five-minute poll
+      only asks which devices exist, which is a question nothing pushes.
+  brands:
+    status: exempt
+    comment: |
+      home-assistant/brands only accepts core and default-listed integrations.
+      The icons and logos are in custom_components/unifi_play/brand/ so they
+      are ready if that changes.
+  common-modules:
+    status: done
+    comment: coordinator.py and entity.py, with the write path in zone_writer.py.
+  config-flow-test-coverage:
+    status: done
+    comment: 100% of config_flow.py, gated in CI by scripts/check_coverage.py.
+  config-flow:
+    status: done
+    comment: |
+      Two modes, each with its own step. No YAML configuration has ever
+      existed, so there is no import path to keep.
+  dependency-transparency:
+    status: done
+    comment: |
+      One runtime dependency, paho-mqtt, from PyPI and version-bounded in
+      manifest.json. Dependabot proposes the bumps.
+  docs-actions:
+    status: done
+    comment: README "Zone actions" and "Device actions", with parameters and
+      the errors each can raise.
+  docs-high-level-description:
+    status: done
+  docs-installation-instructions:
+    status: done
+    comment: HACS and manual, including the verified release archive.
+  docs-removal-instructions:
+    status: done
+    comment: |
+      README "Removing it", including the two things that deliberately
+      survive: zones live on the speakers, and settings written to a speaker
+      stay written.
+  entity-event-setup:
+    status: done
+    comment: |
+      Entities extend CoordinatorEntity, which subscribes in
+      async_added_to_hass and unsubscribes on removal.
+  entity-unique-id:
+    status: done
+    comment: |
+      unifi_play_<MAC>_<key> for speakers, unifi_play_zone_<group_id>_<key>
+      for zones. MAC-based rather than per-entry, which is why
+      _entry_already_covering blocks a second entry over the same hardware.
+  has-entity-name:
+    status: done
+  runtime-data:
+    status: done
+    comment: |
+      ConfigEntry.runtime_data, typed through UnifiPlayConfigEntry. Nothing
+      is stored in hass.data.
+  test-before-configure:
+    status: done
+    comment: |
+      Console setup probes Apollo; direct setup runs a real discovery sweep
+      and refuses a host list that reaches nothing.
+  test-before-setup:
+    status: done
+    comment: |
+      async_config_entry_first_refresh, raising ConfigEntryNotReady on a
+      transient failure and ConfigEntryAuthFailed on a rejected key.
+  unique-config-entry:
+    status: done
+    comment: |
+      Unique ID per mode, plus an overlap check on the discovered hardware:
+      a console entry and a direct entry have different identities and can
+      still reach the same speakers.
+
+  # ── Silver ─────────────────────────────────────────────────────────────
+  action-exceptions:
+    status: done
+    comment: |
+      ServiceValidationError with a translation key for anything the user
+      can fix, HomeAssistantError otherwise. Asserted per key in
+      tests/test_services.py and tests/test_zone_actions.py.
+  config-entry-unloading:
+    status: done
+    comment: |
+      Platforms unloaded, every MQTT client stopped with a bounded wait, and
+      the pending host-election re-reads cancelled. A timer outliving its
+      entry is how a reload ends up with two of everything.
+  docs-configuration-parameters:
+    status: done
+    comment: |
+      The options flow is zone management rather than settings; the setup
+      parameters and the TLS choice are documented in README.
+  docs-installation-parameters:
+    status: done
+  entity-unavailable:
+    status: done
+    comment: |
+      Availability follows the live MQTT connection, not the presence of a
+      client object. The connectivity binary sensor stays available so there
+      is something to read when everything else is not.
+  integration-owner:
+    status: done
+  log-when-unavailable:
+    status: done
+    comment: Once per transition, not once per attempt, and reset on recovery.
+  parallel-updates:
+    status: done
+    comment: |
+      PARALLEL_UPDATES = 0 in every platform. There is nothing to serialise:
+      state is pushed and commands are fire-and-forget publishes.
+  reauthentication-flow:
+    status: done
+    comment: |
+      Console entries only, since they are the only ones with a credential.
+      Started by the coordinator raising ConfigEntryAuthFailed on 401 or 403.
+  test-coverage:
+    status: done
+    comment: |
+      Above 95% for every module and 100% for the config flow, enforced by
+      scripts/check_coverage.py on the minimum lane.
+
+  # ── Gold ───────────────────────────────────────────────────────────────
+  devices:
+    status: done
+    comment: A device per speaker, plus one per zone with the host as via_device.
+  diagnostics:
+    status: done
+    comment: |
+      Built by naming what goes in rather than filtering what comes out.
+      Identifiers are hashed consistently within one report so a zone's
+      members can still be matched against the speaker list.
+  discovery:
+    status: todo
+    comment: |
+      The integration discovers speakers itself over UDP 10001, but does not
+      register with Home Assistant's own discovery, so adding it is a manual
+      step. DHCP discovery on the Ubiquiti OUI looks plausible and has not
+      been verified against hardware, and this repository does not ship
+      protocol assumptions that nobody has measured.
+  discovery-update-info:
+    status: done
+    comment: |
+      A speaker that changes address is reconnected at the new one on the
+      next poll, and the change is logged rather than reported as a drop.
+  docs-data-update:
+    status: done
+    comment: README "How it works" and "When a speaker goes offline".
+  docs-examples:
+    status: done
+    comment: An automation on the zone member-changed event.
+  docs-known-limitations:
+    status: done
+  docs-supported-devices:
+    status: done
+    comment: Both models, with the firmware each was tested against.
+  docs-supported-functions:
+    status: done
+  docs-troubleshooting:
+    status: done
+    comment: |
+      Including the two failures that look like dead hardware: a rotated
+      certificate, and speakers that disagree about a zone.
+  docs-use-cases:
+    status: done
+  dynamic-devices:
+    status: done
+    comment: |
+      A speaker adopted after setup gets its entities on the next poll, with
+      no reload. tests/test_platforms.py::test_a_new_speaker_gets_entities_without_a_reload.
+  entity-category:
+    status: done
+    comment: |
+      Settings are CONFIG, technical status is DIAGNOSTIC, and what the
+      speaker is doing has no category. Asserted per entity in
+      tests/test_entity_quality.py.
+  entity-device-class:
+    status: done
+    comment: Where one applies. Most of these entities have no matching class.
+  entity-disabled-by-default:
+    status: done
+    comment: |
+      The ten EQ bands and the noisier diagnostics. A user who enables one
+      keeps it enabled across a reload.
+  entity-translations:
+    status: done
+    comment: |
+      No entity is named in Python. tests/test_entity_quality.py fails on a
+      name= or an _attr_name beside a translation key, and on a key with no
+      entry to resolve to.
+  exception-translations:
+    status: done
+    comment: |
+      Every translation key raised anywhere in the package resolves, checked
+      statically in tests/test_entity_quality.py.
+  icon-translations:
+    status: done
+    comment: |
+      icons.json, including the state-dependent connectivity icon. A key
+      with a hard-coded _attr_icon beside it fails the test.
+  reconfiguration-flow:
+    status: done
+    comment: |
+      Both modes. A console can move address and a direct entry can change
+      its host list, without losing an entity ID.
+  repair-issues:
+    status: done
+    comment: |
+      One issue, for a speaker that rejected every bundled certificate. It
+      is the only failure this integration can detect that the user has to
+      act on and cannot see anywhere else.
+  stale-devices:
+    status: done
+    comment: |
+      async_remove_config_entry_device for speakers, and a zone sweep for
+      zone devices and entities. The sweep is gated on every speaker having
+      reported, because an ungated one deletes every zone entity during
+      startup and takes the user's dashboard cards with it.
+
+  # ── Platinum ───────────────────────────────────────────────────────────
+  async-dependency:
+    status: todo
+    comment: |
+      paho-mqtt is synchronous. It runs on its own thread via loop_start()
+      and every callback crosses back to the event loop explicitly, which is
+      correct but is not the same thing as an async dependency. Replacing it
+      would mean re-deriving the BinMe framing and the certificate-generation
+      fallback against hardware, so it is not a change to make on the
+      strength of a checklist.
+  inject-websession:
+    status: done
+    comment: |
+      Home Assistant's shared session, taken as a constructor argument. The
+      integration used to build its own and had several paths that raised
+      without closing it.
+  strict-typing:
+    status: done
+    comment: |
+      mypy --strict against the real Home Assistant package rather than
+      stubs, so a signature that changes under us is caught rather than
+      matched against a stale description of it.

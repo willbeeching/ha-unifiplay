@@ -554,12 +554,11 @@ class UnifiPlayOptionsFlow(OptionsFlow):
     def _mac_for_device_id(self, device_id: str) -> str | None:
         """Resolve a Home Assistant device id to a speaker MAC."""
         try:
-            coordinator, internal_id = resolve_device(self.hass, device_id)
+            _coordinator, _internal_id, state = resolve_device(self.hass, device_id)
         except ServiceValidationError:
             _LOGGER.debug("Could not resolve speaker %s", device_id)
             return None
-        state = (coordinator.data or {}).get(internal_id)
-        return state.mac if state is not None else None
+        return state.mac
 
     def _occupied_macs(self) -> set[str]:
         """Every speaker currently in any zone this coordinator knows about."""

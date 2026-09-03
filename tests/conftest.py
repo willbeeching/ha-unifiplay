@@ -537,6 +537,20 @@ async def synced_zone(
     return setup_direct
 
 
+def entity_object(hass: HomeAssistant, entity_id: str) -> Any:
+    """The live entity object behind an entity id.
+
+    For the handful of properties Home Assistant stops calling once an entity
+    reports unavailable, which is exactly the state several guards exist for.
+    """
+    from homeassistant.helpers.entity_component import DATA_INSTANCES
+
+    component = hass.data[DATA_INSTANCES][entity_id.split(".")[0]]
+    entity = component.get_entity(entity_id)
+    assert entity is not None, entity_id
+    return entity
+
+
 def entry_coordinator(hass: HomeAssistant, entry: ConfigEntry) -> Any:
     """The coordinator behind a loaded entry.
 

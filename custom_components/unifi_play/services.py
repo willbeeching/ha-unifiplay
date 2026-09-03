@@ -162,17 +162,16 @@ SET_ZONE_INDEX_SCHEMA = vol.Schema(
 
 
 def _client(hass: HomeAssistant, call: ServiceCall) -> UnifiPlayMqttClient:
-    coordinator, dev_id = resolve_device(hass, call.data[ATTR_DEVICE_ID])
+    coordinator, dev_id, state = resolve_device(hass, call.data[ATTR_DEVICE_ID])
     client = coordinator.get_mqtt_client(dev_id)
     # A registered client is not necessarily a connected one: the coordinator
     # adds it before dialling out, and publish_action drops commands silently
     # while disconnected (#14).
     if client is None or not client.is_connected:
-        state = (coordinator.data or {}).get(dev_id)
         raise ServiceValidationError(
             translation_domain=DOMAIN,
             translation_key="device_not_connected",
-            translation_placeholders={"device": state.device_name if state else dev_id},
+            translation_placeholders={"device": state.device_name},
         )
     return client
 
@@ -225,12 +224,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         return
 
     def _state(call: ServiceCall) -> UnifiPlayDeviceState:
-        coordinator, dev_id = resolve_device(hass, call.data[ATTR_DEVICE_ID])
-        state = (coordinator.data or {}).get(dev_id)
-        if state is None:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN, translation_key="device_state_unavailable"
-            )
+        _coordinator, _dev_id, state = resolve_device(hass, call.data[ATTR_DEVICE_ID])
         return state
 
     async def play_announcement(call: ServiceCall) -> None:
@@ -319,34 +313,16 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     def _zone_device_mac(call: ServiceCall, key: str = ATTR_DEVICE_ID) -> str:
         """Resolve a Home Assistant device id to a speaker MAC."""
-        coordinator, dev_id = resolve_device(hass, call.data[key])
-        state = (coordinator.data or {}).get(dev_id)
-        if state is None:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="device_state_unavailable",
-            )
+        _coordinator, _dev_id, state = resolve_device(hass, call.data[key])
         return state.mac
 
     async def create_zone(call: ServiceCall) -> None:
-        host_coordinator, host_dev_id = resolve_device(
+        host_coordinator, _host_dev_id, host_state = resolve_device(
             hass, call.data["host_device_id"]
         )
-        host_state = (host_coordinator.data or {}).get(host_dev_id)
-        if host_state is None:
-            raise ServiceValidationError(
-                translation_domain=DOMAIN,
-                translation_key="device_state_unavailable",
-            )
         macs = [host_state.mac]
         for member_device_id in call.data["member_device_ids"]:
-            m_coordinator, m_dev_id = resolve_device(hass, member_device_id)
-            m_state = (m_coordinator.data or {}).get(m_dev_id)
-            if m_state is None:
-                raise ServiceValidationError(
-                    translation_domain=DOMAIN,
-                    translation_key="device_state_unavailable",
-                )
+            _m_coordinator, _m_dev_id, m_state = resolve_device(hass, member_device_id)
             macs.append(m_state.mac)
         # No host is designated at creation: the "host" key is omitted
         # entirely, not set false. The firmware elects one and writes the

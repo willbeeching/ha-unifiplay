@@ -36,8 +36,13 @@ def mac_normalise(mac: str) -> str:
 
 def resolve_device(
     hass: HomeAssistant, device_id: str
-) -> tuple[UnifiPlayCoordinator, str]:
-    """Map an HA device_id to its coordinator and internal device id.
+) -> tuple[UnifiPlayCoordinator, str, UnifiPlayDeviceState]:
+    """Map an HA device_id to its coordinator, internal device id and state.
+
+    The state comes back with the other two because finding it is how the
+    match is made: a device id resolves by looking for a speaker whose MAC
+    matches, so there is always a state and callers that fetched it again
+    were writing a guard against a case that cannot happen.
 
     Raises ServiceValidationError so the error surfaces cleanly in both
     service and config-flow callers regardless of how they catch it.
@@ -64,16 +69,16 @@ def resolve_device(
     # caller fails on a dead entry while a working one sits beside it (#15).
     # A registered client is not necessarily a connected one either: the
     # coordinator adds it before dialling out (#14).
-    fallback: tuple[UnifiPlayCoordinator, str] | None = None
+    fallback: tuple[UnifiPlayCoordinator, str, UnifiPlayDeviceState] | None = None
     for coordinator in loaded_coordinators(hass):
         for dev_id, state in (coordinator.data or {}).items():
             if mac_normalise(state.mac) not in norm_macs:
                 continue
             client = coordinator.get_mqtt_client(dev_id)
             if client is not None and client.is_connected:
-                return coordinator, dev_id
+                return coordinator, dev_id, state
             if fallback is None:
-                fallback = (coordinator, dev_id)
+                fallback = (coordinator, dev_id, state)
     if fallback is not None:
         return fallback
     raise ServiceValidationError(

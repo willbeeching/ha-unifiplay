@@ -523,9 +523,6 @@
     "device_not_connected": {
       "message": "No MQTT connection to {device}. The speaker may be powered off, on a network Home Assistant cannot reach, or blocked on TCP 8883."
     },
-    "device_state_unavailable": {
-      "message": "That speaker has not reported any state yet. It is discovered but not connected; wait for it to come online and try again."
-    },
     "unknown_device": {
       "message": "Unknown device {device_id}. It may have been removed."
     },

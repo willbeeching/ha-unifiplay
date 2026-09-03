@@ -73,6 +73,13 @@ python scripts/build_release_archive.py         # the release zip, reproducibly
 python scripts/dump_device.py <DEVICE_IP>       # dump a device's live state
 ```
 
+Release and hardware verification, including the smoke test to run on both
+models before tagging, is in [`docs/verification.md`](docs/verification.md).
+`custom_components/unifi_play/quality_scale.yaml` records where the
+integration stands against Home Assistant's quality scale, and what is not
+met. Nothing checks that file automatically, so a rule marked `done` has to
+name the test or the code that makes it true.
+
 Two supported lanes, both run in CI and both must stay green:
 
 | Lane | Home Assistant | Python | Requirements |
@@ -107,9 +114,8 @@ parts of the meaning were verified on hardware rather than merely observed.
 assertion encodes a guess as a fact and then defends it.
 
 Coverage is gated per module, not just overall: 95% for every production
-module, 100% for `config_flow.py`. While the suite is still being built out
-the gate is ratcheted against `scripts/coverage_floors.json` — coverage may
-rise, never fall.
+module, 100% for `config_flow.py`. Both are enforced in CI and by the
+pre-push hook, and a module that drops below fails the build.
 
 "Verified" still means one of:
 

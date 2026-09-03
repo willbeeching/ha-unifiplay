@@ -411,6 +411,185 @@ async def test_resolve_prefers_a_connected_coordinator(
     actually holds a live connection (#15)."""
     from custom_components.unifi_play.helpers import resolve_device
 
-    coordinator, dev_id = resolve_device(hass, _device_id(hass, setup_direct))
+    coordinator, dev_id, _state = resolve_device(hass, _device_id(hass, setup_direct))
     assert coordinator is entry_coordinator(hass, setup_direct)
     assert coordinator.get_mqtt_client(dev_id) is not None
+
+
+async def test_an_announcement_length_nobody_reported(
+    hass: HomeAssistant, setup_direct: MockConfigEntry, amp: FakeDevice, settle
+) -> None:
+    """A clip the speaker has never listed still plays.
+
+    Zero means "until it ends" to the firmware, so refusing here would break
+    an automation for a file that was uploaded a second ago.
+    """
+    amp.emit(
+        "announcement",
+        {"files": [{"name": "other.wav", "length": 9}, "not-a-dict"], "schedule": []},
+    )
+    await settle(hass)
+    amp.clear()
+
+    await _call(
+        hass,
+        "play_announcement",
+        device_id=_device_id(hass, setup_direct),
+        filename="brand_new.wav",
+    )
+    assert amp.last_action("announce").body["length"] == 0
+
+
+async def test_deleting_a_file_the_speaker_has_not_listed(
+    hass: HomeAssistant, setup_direct: MockConfigEntry, amp: FakeDevice, settle
+) -> None:
+    """The delete carries a length the device uses to identify the clip.
+
+    Nothing to look up means zero, and the device ignores a delete for a file
+    it does not have either way.
+    """
+    amp.emit(
+        "announcement",
+        {"files": [{"name": "kept.wav", "length": 3}, 7], "schedule": []},
+    )
+    await settle(hass)
+    amp.clear()
+
+    await _call(
+        hass,
+        "delete_announcement_file",
+        device_id=_device_id(hass, setup_direct),
+        filename="gone.wav",
+    )
+    assert amp.last_action("announce").body["files"] == [
+        {"name": "gone.wav", "length": 0}
+    ]
+
+
+async def test_a_zone_entity_whose_zone_has_gone(
+    hass: HomeAssistant, synced_zone: MockConfigEntry
+) -> None:
+    """The entity outlives the zone by a moment when it is deleted elsewhere.
+
+    Reported as "that zone no longer exists" rather than as an unknown
+    entity, which would send the user looking at their automation.
+    """
+    entry_coordinator(hass, synced_zone).groups.clear()
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(hass, "delete_zone", entity_id="media_player.downstairs")
+    assert err.value.translation_key == "zone_not_found"
+
+
+async def test_a_zone_announcement_needs_the_host_connected(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """It is fanned out by the host, so no host is no announcement.
+
+    A registered client is not a connected one: publish_action drops commands
+    while the socket is down, so without this the action reports success and
+    nothing plays (#14).
+    """
+    amp.drop()
+    await settle(hass)
+    amp.clear()
+    port.clear()
+
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(
+            hass,
+            "play_zone_announcement",
+            entity_id="media_player.downstairs",
+            filename="closing.wav",
+        )
+    assert err.value.translation_key == "zone_host_not_connected"
+    assert port.published_actions("announce") == []
+
+
+async def test_a_zone_announcement_reuses_the_length_the_host_reported(
+    hass: HomeAssistant, synced_zone: MockConfigEntry, amp: FakeDevice, settle
+) -> None:
+    amp.emit(
+        "announcement",
+        {"files": [{"name": "closing.wav", "length": 12}], "schedule": []},
+    )
+    await settle(hass)
+    amp.clear()
+
+    await _call(
+        hass,
+        "play_zone_announcement",
+        entity_id="media_player.downstairs",
+        filename="closing.wav",
+    )
+    assert amp.last_action("announce").body["length"] == 12
+
+
+async def test_a_zone_announcement_with_no_length_anywhere(
+    hass: HomeAssistant, synced_zone: MockConfigEntry, amp: FakeDevice
+) -> None:
+    amp.clear()
+    await _call(
+        hass,
+        "play_zone_announcement",
+        entity_id="media_player.downstairs",
+        filename="unlisted.wav",
+    )
+    assert amp.last_action("announce").body["length"] == 0
+
+
+async def test_stopping_a_zone_announcement_reaches_every_member(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+) -> None:
+    """Unlike playing it, which goes through the host alone.
+
+    The host fans out the start; it does not fan out the stop, so a member
+    that is skipped keeps playing in a room the user just silenced.
+    """
+    amp.clear()
+    port.clear()
+    await _call(hass, "stop_zone_announcement", entity_id="media_player.downstairs")
+    for device in (amp, port):
+        assert device.last_action("announce").body["enable"] is False
+
+
+async def test_stopping_a_zone_announcement_refuses_while_a_member_is_offline(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """Silencing three rooms of four and reporting success is worse than
+    refusing: the user has no way to tell which room is still playing."""
+    port.drop()
+    await settle(hass)
+    amp.clear()
+
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(hass, "stop_zone_announcement", entity_id="media_player.downstairs")
+    assert err.value.translation_key == "zone_members_offline"
+    assert amp.published_actions("announce") == []
+
+
+async def test_registering_twice_is_a_no_op(
+    hass: HomeAssistant, setup_direct: MockConfigEntry
+) -> None:
+    """Two config entries both call it, and the second must not re-register.
+
+    Re-registering would rebind every handler to the second entry's closure,
+    which is how an action against one entry ends up talking to another.
+    """
+    from custom_components.unifi_play.services import async_register_services
+
+    before = {name: hass.services.has_service(DOMAIN, name) for name in SERVICE_NAMES}
+    async_register_services(hass)
+    after = {name: hass.services.has_service(DOMAIN, name) for name in SERVICE_NAMES}
+    assert before == after
+    assert all(after.values())

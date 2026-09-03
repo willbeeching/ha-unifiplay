@@ -20,13 +20,12 @@ Reads the JSON report ``pytest --cov-report=json`` writes. Run it as:
 Exits non-zero with a per-module table on failure, so CI says which file is
 short rather than only that something is.
 
-**The ratchet.** ``scripts/coverage_floors.json`` records what each module
-reaches today. While a module is below target, the floor is what is enforced:
-coverage may go up, never down. That makes the gate useful from the first
-commit instead of being switched off until the day everything clears 95%,
-which is the day it never gets switched on. Passing ``--strict`` ignores the
-floors and demands the real targets; the file is deleted, and the flag
-becomes the default, once every module clears them.
+There is no ratchet any more. While the suite was being built out this
+enforced a per-module floor recorded in ``scripts/coverage_floors.json``,
+which could rise but never fall; every module now clears the real targets, so
+the floors file is gone and the targets are what runs. Restoring a ratchet
+would mean a module could be allowed to sit below 95% again, which is the
+thing it existed to stop.
 """
 
 from __future__ import annotations
@@ -67,25 +66,14 @@ def _module_name(path: str) -> str:
     return normalised
 
 
-FLOORS_PATH = Path(__file__).resolve().parent / "coverage_floors.json"
-
-
 def _module_target(module: str) -> float:
     if module in FULL_COVERAGE_MODULES:
         return 100.0
     return MODULE_MINIMUM
 
 
-def _load_floors(strict: bool) -> dict[str, float]:
-    if strict or not FLOORS_PATH.is_file():
-        return {}
-    data = json.loads(FLOORS_PATH.read_text(encoding="utf-8"))
-    return {str(k): float(v) for k, v in data.get("modules", {}).items()}
-
-
 def main(argv: list[str]) -> int:
     args = [a for a in argv[1:] if not a.startswith("-")]
-    strict = "--strict" in argv[1:]
     report_path = Path(args[0] if args else "coverage.json")
     if not report_path.is_file():
         print(f"coverage report not found: {report_path}", file=sys.stderr)
@@ -101,51 +89,35 @@ def main(argv: list[str]) -> int:
         print("coverage report contains no files", file=sys.stderr)
         return 2
 
-    floors = _load_floors(strict)
-    overall_floor = OVERALL_MINIMUM
-    if not strict and FLOORS_PATH.is_file():
-        overall_floor = float(
-            json.loads(FLOORS_PATH.read_text(encoding="utf-8")).get(
-                "total", OVERALL_MINIMUM
-            )
-        )
-
-    rows: list[tuple[str, float, float, float, list[int]]] = []
+    rows: list[tuple[str, float, float, list[int]]] = []
     for path, data in sorted(files.items()):
         module = _module_name(path)
         if module in EXEMPT_MODULES:
             continue
         percent = float(data["summary"]["percent_covered"])
-        target = _module_target(module)
-        required = min(target, floors.get(module, target))
-        rows.append((module, percent, required, target, data.get("missing_lines", [])))
+        rows.append(
+            (
+                module,
+                percent,
+                _module_target(module),
+                data.get("missing_lines", []),
+            )
+        )
 
     overall = float(report["totals"]["percent_covered"])
 
     failures = [row for row in rows if row[1] + 1e-9 < row[2]]
-    overall_short = overall + 1e-9 < min(OVERALL_MINIMUM, overall_floor)
+    overall_short = overall + 1e-9 < OVERALL_MINIMUM
 
     width = max((len(row[0]) for row in rows), default=10)
-    header = f"{'module':<{width}}  {'covered':>8}  {'floor':>8}  {'target':>8}"
+    header = f"{'module':<{width}}  {'covered':>8}  {'target':>8}"
     print(header)
     print("-" * len(header))
-    for module, percent, required, target, _missing in rows:
-        flag = "" if percent + 1e-9 >= required else "  FAIL"
-        gap = "" if percent + 1e-9 >= target else "  (below target)"
-        print(
-            f"{module:<{width}}  {percent:>7.2f}%  {required:>7.1f}%  "
-            f"{target:>7.1f}%{flag or gap}"
-        )
+    for module, percent, target, _missing in rows:
+        flag = "" if percent + 1e-9 >= target else "  FAIL"
+        print(f"{module:<{width}}  {percent:>7.2f}%  {target:>7.1f}%{flag}")
     print("-" * len(header))
-    print(
-        f"{'TOTAL':<{width}}  {overall:>7.2f}%  "
-        f"{min(OVERALL_MINIMUM, overall_floor):>7.1f}%  {OVERALL_MINIMUM:>7.1f}%"
-    )
-    if not strict and floors:
-        print(
-            "\nRatcheted against scripts/coverage_floors.json. "
-            "Coverage may rise; it may not fall."
-        )
+    print(f"{'TOTAL':<{width}}  {overall:>7.2f}%  {OVERALL_MINIMUM:>7.1f}%")
 
     if not failures and not overall_short:
         return 0
@@ -153,19 +125,18 @@ def main(argv: list[str]) -> int:
     print("", file=sys.stderr)
     if overall_short:
         print(
-            f"integration coverage {overall:.2f}% is below "
-            f"{min(OVERALL_MINIMUM, overall_floor):.1f}%",
+            f"integration coverage {overall:.2f}% is below " f"{OVERALL_MINIMUM:.1f}%",
             file=sys.stderr,
         )
-    for module, percent, required, _tgt, missing in failures:
+    for module, percent, target, missing in failures:
         print(
-            f"{module}: {percent:.2f}% is below {required:.1f}% "
+            f"{module}: {percent:.2f}% is below {target:.1f}% "
             f"(uncovered lines: {_format_lines(missing)})",
             file=sys.stderr,
         )
     print(
-        "\nCoverage went down. Add tests for the lines listed above, or say "
-        "in review why the floor should move.",
+        "\nAdd tests for the lines listed above. Lowering the target is a "
+        "change to argue for in review, not a way past this.",
         file=sys.stderr,
     )
     return 1

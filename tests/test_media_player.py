@@ -15,6 +15,7 @@ from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from .conftest import entity_object
 from .const import fixture
 from .fake_mqtt import FakeDevice
 
@@ -129,6 +130,95 @@ async def test_no_cover_path_means_no_picture(
     assert "entity_picture" not in hass.states.get(AMP).attributes
 
 
+async def test_an_absolute_cover_url_is_left_alone(
+    hass: HomeAssistant, setup_direct: MockConfigEntry, amp: FakeDevice, settle
+) -> None:
+    """Some services hand the speaker a URL rather than a local path.
+
+    Prefixing the speaker's address to it produces a 404 on the speaker and
+    no artwork at all.
+    """
+    amp.emit("online", {"status": 1})
+    amp.emit("metadata", {"cover_path": "https://art.example/cover.jpg"})
+    await settle(hass)
+
+    entity = entity_object(hass, AMP)
+    assert entity.media_image_url == "https://art.example/cover.jpg"
+
+
+async def test_no_address_means_no_cover_url(
+    hass: HomeAssistant, setup_direct: MockConfigEntry, amp: FakeDevice, settle
+) -> None:
+    """A speaker identified over MQTT alone has no address to fetch from."""
+    amp.emit("metadata", {"cover_path": "cover/current.jpg"})
+    await settle(hass)
+
+    entity = entity_object(hass, AMP)
+    entity._device_state.ip = ""
+    assert entity.media_image_url is None
+    assert await entity.async_get_media_image() == (None, None)
+
+
+async def test_cover_art_is_fetched_by_home_assistant(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    amp: FakeDevice,
+    settle,
+    aioclient_mock,
+) -> None:
+    """The speaker's certificate is self-signed, so the browser cannot.
+
+    Home Assistant proxies it instead, which is the only reason the artwork
+    appears at all.
+    """
+    amp.emit("metadata", {"cover_path": "cover/current.jpg"})
+    await settle(hass)
+
+    entity = entity_object(hass, AMP)
+    aioclient_mock.get(
+        entity.media_image_url,
+        content=b"\x89PNG-not-really",
+        headers={"Content-Type": "image/png"},
+    )
+    assert await entity.async_get_media_image() == (b"\x89PNG-not-really", "image/png")
+
+
+async def test_a_cover_the_speaker_will_not_serve(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    amp: FakeDevice,
+    settle,
+    aioclient_mock,
+) -> None:
+    """The path is reported before the file is written often enough to
+    matter, and a 404 must not become an exception in the frontend."""
+    amp.emit("metadata", {"cover_path": "cover/current.jpg"})
+    await settle(hass)
+
+    entity = entity_object(hass, AMP)
+    aioclient_mock.get(entity.media_image_url, status=404)
+    assert await entity.async_get_media_image() == (None, None)
+
+
+async def test_a_speaker_that_stops_answering_mid_fetch(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    amp: FakeDevice,
+    settle,
+    aioclient_mock,
+) -> None:
+    import aiohttp
+
+    amp.emit("metadata", {"cover_path": "cover/current.jpg"})
+    await settle(hass)
+
+    entity = entity_object(hass, AMP)
+    aioclient_mock.get(
+        entity.media_image_url, exc=aiohttp.ClientConnectionError("gone")
+    )
+    assert await entity.async_get_media_image() == (None, None)
+
+
 async def test_zone_membership_attributes(
     hass: HomeAssistant, setup_direct: MockConfigEntry, amp: FakeDevice, settle
 ) -> None:
@@ -145,6 +235,11 @@ async def test_zone_membership_attributes(
     attrs = hass.states.get(AMP).attributes
     assert attrs["hosting_group"] == "zone-1"
     assert attrs["wideband_broadcasting"] is True
+    assert "zone_synced" not in attrs
+
+    amp.emit("info", {"sync_devices": ["AABBCCDDEE11"]})
+    await settle(hass)
+    assert hass.states.get(AMP).attributes["zone_synced"] is True
 
 
 # ── Commands ──────────────────────────────────────────────────────────────

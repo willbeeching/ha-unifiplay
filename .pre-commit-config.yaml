@@ -96,8 +96,8 @@ repos:
       - id: coverage-gate
         name: per-module coverage
         # The suite has to run to produce a report, so this is a push-time
-        # hook rather than a commit-time one. It enforces the floors in
-        # scripts/coverage_floors.json: coverage may rise, never fall.
+        # hook rather than a commit-time one. 95% per module, 100% for the
+        # config flow.
         entry: bash -c 'pytest -q --cov --cov-report=json:coverage.json >/dev/null && python3.13 scripts/check_coverage.py coverage.json'
         language: system
         pass_filenames: false

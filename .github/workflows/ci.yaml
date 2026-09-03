@@ -142,10 +142,10 @@ jobs:
       # branches (a deprecation shim taken on one and not the other), and
       # gating on whichever ran last would make the threshold depend on
       # scheduling.
-      # Ratcheted against scripts/coverage_floors.json while the suite is
-      # being built out: coverage may rise, never fall. The floors file is
-      # deleted and --strict becomes the default once every module clears
-      # 95% (100% for the config flow).
+      # 95% for every module and 100% for the config flow, enforced per
+      # module rather than as one repository-wide number: 95% overall is
+      # comfortably reachable with the largest and most branch-heavy file
+      # barely touched.
       - name: Per-module coverage gate
         if: matrix.coverage
         run: python scripts/check_coverage.py coverage.json
