@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "What each module reaches today. The coverage gate enforces the",
+    "lower of this and the real target (95%, or 100% for a config",
+    "flow), so coverage can rise but never fall while the suite is",
+    "still being built out. Raise a number when a PR lifts a module;",
+    "delete this file and pass --strict once every module clears its",
+    "target."
+  ],
+  "total": 58.2,
+  "modules": {
+    "api.py": 42.6,
+    "binary_sensor.py": 68.3,
+    "button.py": 100.0,
+    "config_flow.py": 8.9,
+    "const.py": 100.0,
+    "coordinator.py": 62.4,
+    "discovery.py": 98.0,
+    "entity.py": 100.0,
+    "helpers.py": 24.6,
+    "media_player.py": 53.2,
+    "mqtt_client.py": 93.3,
+    "number.py": 97.1,
+    "select.py": 69.8,
+    "sensor.py": 100.0,
+    "services.py": 23.4,
+    "switch.py": 100.0,
+    "text.py": 94.2
+  }
+}

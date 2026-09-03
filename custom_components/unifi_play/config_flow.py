@@ -82,7 +82,9 @@ def _parse_manual_hosts(raw: str) -> list[str]:
     return [h for h in raw.replace(",", " ").split() if h]
 
 
-def _entry_already_covering(hass: HomeAssistant, devices: list[dict]) -> str | None:
+def _entry_already_covering(
+    hass: HomeAssistant, devices: list[dict[str, Any]]
+) -> str | None:
     """Return the title of an existing entry already managing these devices.
 
     Two entries cannot share hardware. Every entity's unique ID is built from
@@ -164,7 +166,7 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(normalized_host)
             self._abort_if_unique_id_configured()
 
-            devices: list[dict] = []
+            devices: list[dict[str, Any]] = []
             try:
                 # An empty device list is not a setup failure: the API
                 # answered, so host and key are good. api.validate_connection
@@ -281,7 +283,10 @@ class UnifiPlayOptionsFlow(OptionsFlow):
 
     @property
     def _coordinator(self) -> UnifiPlayCoordinator:
-        return self.hass.data[DOMAIN][self.config_entry.entry_id]
+        coordinator: UnifiPlayCoordinator = self.hass.data[DOMAIN][
+            self.config_entry.entry_id
+        ]
+        return coordinator
 
     def _build_device_options(
         self,
@@ -367,10 +372,10 @@ class UnifiPlayOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            coordinator = self._coordinator
-            device_ids: list[str] = user_input.get("device_ids") or []
-            if isinstance(device_ids, str):
-                device_ids = [device_ids]
+            # A multi-select returns a list, but a selector rendered with a
+            # single option has been seen to return the bare string.
+            raw_ids: list[str] | str = user_input.get("device_ids") or []
+            device_ids: list[str] = [raw_ids] if isinstance(raw_ids, str) else raw_ids
 
             if len(device_ids) < 2:
                 errors["device_ids"] = "zone_needs_two_devices"
@@ -536,7 +541,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             return self.async_abort(reason="zone_gone")
 
         if user_input is not None:
-            client = coordinator.get_host_mqtt_client(self._selected_zone_id)
+            client = coordinator.get_host_mqtt_client(gs.group_id)
             if client is None:
                 errors["base"] = "no_mqtt"
             else:
@@ -590,9 +595,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
                     if occupied is not None and occupied != gs.group_id:
                         errors["base"] = "device_in_other_zone"
                     else:
-                        client = coordinator.get_host_mqtt_client(
-                            self._selected_zone_id
-                        )
+                        client = coordinator.get_host_mqtt_client(gs.group_id)
                         if client is None:
                             errors["base"] = "no_mqtt"
                         else:
@@ -661,7 +664,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             elif len(new_dev_info) < 2:
                 errors["base"] = "zone_needs_two_devices"
             elif not removing_host:
-                client = coordinator.get_host_mqtt_client(self._selected_zone_id)
+                client = coordinator.get_host_mqtt_client(gs.group_id)
                 if client is None:
                     errors["base"] = "no_mqtt"
                 else:
@@ -723,11 +726,11 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             return self.async_abort(reason="zone_gone")
 
         if user_input is not None:
-            client = coordinator.get_host_mqtt_client(self._selected_zone_id)
+            client = coordinator.get_host_mqtt_client(gs.group_id)
             if client is None:
                 errors["base"] = "no_mqtt"
             else:
-                coordinator.delete_zone(self._selected_zone_id)
+                coordinator.delete_zone(gs.group_id)
                 self._selected_zone_id = None
                 return await self.async_step_init()
 
@@ -751,7 +754,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             if user_input["source_mode"] == "streaming":
-                client = coordinator.get_host_mqtt_client(self._selected_zone_id)
+                client = coordinator.get_host_mqtt_client(gs.group_id)
                 if client is None:
                     errors["base"] = "no_mqtt"
                 else:
@@ -834,7 +837,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             source_mac = mac_normalise(user_input["source_device"])
             platform = member_platforms.get(source_mac, "")
             wb_input = source_value(platform, user_input["input_type"])
-            client = coordinator.get_host_mqtt_client(self._selected_zone_id)
+            client = coordinator.get_host_mqtt_client(gs.group_id)
             # The input switch has to go to the DEVICE THAT WILL BROADCAST,
             # which is often not the host. Sending it to the host instead
             # would switch the wrong device's input and leave the chosen one
@@ -930,7 +933,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             mode = BROADCASTING_MODE_REVERSE.get(user_input["broadcasting_mode"])
-            client = coordinator.get_host_mqtt_client(self._selected_zone_id)
+            client = coordinator.get_host_mqtt_client(gs.group_id)
             if client is None:
                 errors["base"] = "no_mqtt"
             elif mode is None:
@@ -985,7 +988,7 @@ class UnifiPlayOptionsFlow(OptionsFlow):
             return self.async_abort(reason="zone_gone")
 
         if user_input is not None:
-            client = coordinator.get_host_mqtt_client(self._selected_zone_id)
+            client = coordinator.get_host_mqtt_client(gs.group_id)
             if client is None:
                 errors["base"] = "no_mqtt"
             else:

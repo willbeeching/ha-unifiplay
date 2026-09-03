@@ -86,6 +86,27 @@ async def async_setup_entry(
     def _sync_zones() -> None:
         active = set(coordinator.groups)
 
+        # group_id -> registry device id, for the zone devices this entry owns.
+        #
+        # Built by walking the entry's own devices rather than by looking each
+        # zone identifier up: device_registry.async_get_device is deprecated
+        # from Home Assistant 2026.9 (identifiers are no longer unique across
+        # config entries) and its replacement does not exist on the supported
+        # floor, so neither call is usable across the range this integration
+        # claims. Walking the entry's devices works on both, and is what the
+        # orphan sweep below needed anyway.
+        entry_devices = dr.async_entries_for_config_entry(device_reg, entry.entry_id)
+        zone_device_ids: dict[str, str] = {}
+        for dev_entry in entry_devices:
+            for ident_domain, ident_value in dev_entry.identifiers:
+                if (
+                    ident_domain == DOMAIN
+                    and isinstance(ident_value, str)
+                    and ident_value.startswith("zone_")
+                ):
+                    zone_device_ids[ident_value[len("zone_") :]] = dev_entry.id
+                    break
+
         # Purge entity registrations for zones no longer reported by any device.
         # This covers both cross-session orphans (created last run, deleted
         # while HA was offline) and zones removed in the current session.
@@ -102,37 +123,29 @@ async def async_setup_entry(
             if gid in active:
                 continue
             entity_reg.async_remove(reg_entry.entity_id)
-            device = device_reg.async_get_device({(DOMAIN, f"zone_{gid}")})
-            if device is not None:
-                device_reg.async_remove_device(device.id)
+            device_id = zone_device_ids.get(gid)
+            if device_id is not None:
+                device_reg.async_remove_device(device_id)
             known_zones.pop(gid, None)
 
         # Also purge orphaned zone DEVICES that have no matching entity.
         # This can happen when an entity was removed externally (Developer Tools,
         # MCP) while HA was running, leaving the device record behind with no
         # entity to trigger the entity-registry path above.
-        all_entries = dr.async_entries_for_config_entry(device_reg, entry.entry_id)
         _LOGGER.debug(
             "_sync_zones: scanning %d device entries for orphaned zones",
-            len(all_entries),
+            len(entry_devices),
         )
-        for dev_entry in all_entries:
-            zone_gid: str | None = None
-            for ident_tuple in dev_entry.identifiers:
-                if (
-                    len(ident_tuple) == 2
-                    and ident_tuple[0] == DOMAIN
-                    and isinstance(ident_tuple[1], str)
-                    and ident_tuple[1].startswith("zone_")
-                ):
-                    zone_gid = ident_tuple[1][len("zone_") :]
-                    break
-            if zone_gid is None or zone_gid in active:
+        for zone_gid, device_id in zone_device_ids.items():
+            if zone_gid in active:
+                continue
+            if device_reg.async_get(device_id) is None:
+                # Already removed by the entity sweep above.
                 continue
             _LOGGER.warning(
-                "Removing orphaned zone device: %s (gid=%s)", dev_entry.id, zone_gid
+                "Removing orphaned zone device: %s (gid=%s)", device_id, zone_gid
             )
-            device_reg.async_remove_device(dev_entry.id)
+            device_reg.async_remove_device(device_id)
             known_zones.pop(zone_gid, None)
 
         # Add entities for zones that appeared since the last sync.

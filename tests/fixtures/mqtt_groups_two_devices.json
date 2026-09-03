@@ -1,0 +1,33 @@
+{
+  "timestamp": 1786371652,
+  "groups": [
+    {
+      "group_id": "9c7ba639-ecf4-4c70-bc91-adf043f3e9ae",
+      "name": "Downstairs",
+      "dev_info": [
+        {
+          "type": "UPL-AMP",
+          "mac": "AABBCCDDEEFF",
+          "name": "Living Room",
+          "ip": "192.168.1.100",
+          "color": "black",
+          "host": true
+        },
+        {
+          "type": "UPL-PORT",
+          "mac": "AABBCCDDEE11",
+          "name": "Kitchen",
+          "ip": "192.168.1.101",
+          "color": "black",
+          "host": false
+        }
+      ],
+      "dev_count": 2,
+      "group_index": 1,
+      "broadcasting_mode": "zone_only",
+      "wb_enable": false,
+      "wb_device": "",
+      "wb_input": ""
+    }
+  ]
+}

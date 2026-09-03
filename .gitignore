@@ -12,3 +12,8 @@ build/
 
 # Local scratch: patched copy for live testing + protocol capture tooling
 DEPLOY/
+
+# Coverage artefacts (the gate reads coverage.json in CI, then discards it)
+coverage.json
+.coverage
+htmlcov/

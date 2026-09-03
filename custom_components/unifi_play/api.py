@@ -130,7 +130,7 @@ class UnifiPlayApi:
             self._owns_session = True
         return self._session
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> dict:
+    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         session = await self._ensure_session()
         url = f"{self._base_url}{path}"
         _LOGGER.debug("%s %s", method, url)
@@ -181,7 +181,7 @@ class UnifiPlayApi:
                     raise UnifiPlayApiError(
                         f"Unexpected response ({resp.status}): {text[:200]}"
                     )
-                data: dict = await resp.json()
+                data: dict[str, Any] = await resp.json()
         except (aiohttp.ClientError, TimeoutError) as err:
             _LOGGER.debug("Connection error for %s: %s", url, err)
             raise UnifiPlayConnectionError(f"Connection error: {err}") from err
@@ -191,7 +191,7 @@ class UnifiPlayApi:
             raise UnifiPlayApiError(msg)
         return data
 
-    async def get_devices(self) -> list[dict]:
+    async def get_devices(self) -> list[dict[str, Any]]:
         """Return a list of all Play devices from the controller.
 
         Recent UniFi firmwares stopped populating ``ip`` in the Apollo
@@ -216,7 +216,7 @@ class UnifiPlayApi:
                     dev["ip"] = ip
         return devices
 
-    async def get_groups(self) -> list[dict]:
+    async def get_groups(self) -> list[dict[str, Any]]:
         """Return a list of speaker groups."""
         data = await self._request("GET", "/groups")
         return data.get("data") or []
@@ -229,7 +229,7 @@ class UnifiPlayApi:
             async with session.get(url, headers=self._headers) as resp:
                 if resp.status != 200:
                     raise UnifiPlayApiError(f"Network API status {resp.status}")
-                data: dict = await resp.json(content_type=None)
+                data: dict[str, Any] = await resp.json(content_type=None)
         except (aiohttp.ClientError, TimeoutError) as err:
             raise UnifiPlayApiError(f"Network API error: {err}") from err
         except ValueError as err:
@@ -246,7 +246,7 @@ class UnifiPlayApi:
                 ip_map[mac] = ip
         return ip_map
 
-    async def validate_connection(self) -> list[dict]:
+    async def validate_connection(self) -> list[dict[str, Any]]:
         """Return the discovered devices, or raise a specific error.
 
         Failures are re-raised rather than flattened into a boolean so the

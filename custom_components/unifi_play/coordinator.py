@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
@@ -21,6 +21,7 @@ from .const import (
     EVENT_ZONE_DELETED,
     EVENT_ZONE_MEMBER_CHANGED,
     HOST_ELECTION_REREAD_DELAYS,
+    parse_firmware_version,
 )
 from .discovery import async_resolve_direct
 from .mqtt_client import MqttCertificateRejected, UnifiPlayMqttClient
@@ -49,7 +50,7 @@ class UnifiPlayGroupState:
     wb_enable: bool
     wb_device: str  # MAC of the source Port when wideband is active
     wb_input: str  # "lineIn" | "spdif" | "usb" | ""
-    dev_info: list[dict] = field(default_factory=list)
+    dev_info: list[dict[str, Any]] = field(default_factory=list)
     host_mac: str = ""  # MAC of the device with host=True in dev_info
     # Always 0. set_groups accepts a per-group timestamp, but the groups event
     # carries one only at the top level of the body - never inside a group - so
@@ -59,7 +60,7 @@ class UnifiPlayGroupState:
     timestamp: int = 0
 
     @classmethod
-    def from_mqtt(cls, group: dict) -> "UnifiPlayGroupState":
+    def from_mqtt(cls, group: dict[str, Any]) -> UnifiPlayGroupState:
         host_mac = next(
             (d["mac"] for d in group.get("dev_info", []) if d.get("host")), ""
         )
@@ -83,11 +84,20 @@ class UnifiPlayGroupState:
 # (or an unreachable broker) on an earlier pass.
 DISCOVERY_INTERVAL = timedelta(minutes=5)
 
+#: How long to wait after a CONNACK before the first burst of requests.
+#:
+#: A speaker that has only just accepted the connection drops requests that
+#: arrive immediately behind the CONNACK, leaving the device with no state
+#: until something else happens to ask again. Named rather than inlined so
+#: the test suite can collapse it: the wait is real on hardware and pure dead
+#: time against a fake transport.
+POST_CONNECT_SETTLE = 0.5
+
 
 class UnifiPlayDeviceState:
     """State container for a single Play device, updated via MQTT events."""
 
-    def __init__(self, device_data: dict) -> None:
+    def __init__(self, device_data: dict[str, Any]) -> None:
         self.device_id: str = device_data["id"]
         self.name: str = device_data.get("name", "UniFi Play")
         self.mac: str = device_data.get("mac", "")
@@ -127,7 +137,7 @@ class UnifiPlayDeviceState:
         # 10-band graphic EQ, keyed by the device's own band labels
         # ("32" ... "16k"). Baseline is 0.01, not 0, in the device's own data.
         self.eq_table: dict[str, float] = {}
-        self.eq_custom_presets: list = []
+        self.eq_custom_presets: list[Any] = []
         self.eq_active_preset: str = ""
         self.sub_crossover: int = 85
         self.sub_level: int = 3
@@ -163,10 +173,10 @@ class UnifiPlayDeviceState:
         self.uptime: int = 0
         self.link_quality: int = 0
         # Feature-level state, populated by request_features() responses.
-        self.alarms: list = []
-        self.quiet_hours: list = []
-        self.ann_files: list = []
-        self.ann_schedule: list = []
+        self.alarms: list[Any] = []
+        self.quiet_hours: list[Any] = []
+        self.ann_files: list[Any] = []
+        self.ann_schedule: list[Any] = []
         self.ann_chime: str = ""
         self.ann_volume: int = 0
         self.voice_enhancement: bool = False
@@ -184,7 +194,7 @@ class UnifiPlayDeviceState:
         # Why the device sent this info event, e.g. "set_play". Not always set.
         self.info_action: str = ""
 
-    def update_from_info(self, body: dict) -> None:
+    def update_from_info(self, body: dict[str, Any]) -> None:
         """Update state from an MQTT 'info' event."""
         if "volume" in body:
             self.volume = body["volume"]
@@ -264,7 +274,7 @@ class UnifiPlayDeviceState:
         if "wb_broadcasting" in body:
             self.wb_broadcasting = bool(body["wb_broadcasting"])
 
-    def update_from_equalizer(self, body: dict) -> None:
+    def update_from_equalizer(self, body: dict[str, Any]) -> None:
         """Update EQ state from an MQTT 'equalizer' event."""
         if "active_profile" in body:
             self.eq_preset = body["active_profile"]
@@ -301,7 +311,7 @@ class UnifiPlayDeviceState:
         if "active_preset" in body:
             self.eq_active_preset = body["active_preset"]
 
-    def update_from_sub_audio(self, body: dict) -> None:
+    def update_from_sub_audio(self, body: dict[str, Any]) -> None:
         """Update sub audio state from an MQTT 'sub_audio' event."""
         if "crossover" in body:
             self.sub_crossover = body["crossover"]
@@ -312,7 +322,7 @@ class UnifiPlayDeviceState:
         if "subwoofer" in body:
             self.subwoofer = body["subwoofer"]
 
-    def update_from_metadata(self, body: dict) -> None:
+    def update_from_metadata(self, body: dict[str, Any]) -> None:
         """Update now-playing state from an MQTT 'metadata' event."""
         if "title" in body:
             self.now_playing_song = body["title"]
@@ -336,48 +346,48 @@ class UnifiPlayDeviceState:
         if "playlist" in body:
             self.playlist = body["playlist"]
 
-    def update_from_online(self, body: dict) -> None:
+    def update_from_online(self, body: dict[str, Any]) -> None:
         """Update online status from an MQTT 'online' event."""
         self.online = body.get("status", 0) == 1
 
-    def update_from_alarms(self, body: list | dict) -> None:
+    def update_from_alarms(self, body: list[Any] | dict[str, Any]) -> None:
         """Update the alarm list from an MQTT 'alarms' event (a bare list)."""
         if isinstance(body, list):
             self.alarms = body
 
-    def update_from_quiet_hours(self, body: list | dict) -> None:
+    def update_from_quiet_hours(self, body: list[Any] | dict[str, Any]) -> None:
         """Update quiet hours from an MQTT 'quiet_hours' event (a bare list)."""
         if isinstance(body, list):
             self.quiet_hours = body
 
-    def update_from_announcement(self, body: dict) -> None:
+    def update_from_announcement(self, body: dict[str, Any]) -> None:
         """Update announcement files/schedule from an 'announcement' event."""
         if "files" in body:
             self.ann_files = body["files"] or []
         if "schedule" in body:
             self.ann_schedule = body["schedule"] or []
 
-    def update_from_announce_chime(self, body: dict) -> None:
+    def update_from_announce_chime(self, body: dict[str, Any]) -> None:
         """Update the announcement chime from an 'announce_chime' event."""
         if "chime" in body:
             self.ann_chime = body["chime"]
 
-    def update_from_voice_enhancement(self, body: dict) -> None:
+    def update_from_voice_enhancement(self, body: dict[str, Any]) -> None:
         """Update voice enhancement from a 'voice_enhancement' event."""
         if "enable" in body:
             self.voice_enhancement = bool(body["enable"])
 
-    def update_from_streaming_timeout(self, body: dict) -> None:
+    def update_from_streaming_timeout(self, body: dict[str, Any]) -> None:
         """Update streaming timeout from a 'streaming_timeout' event."""
         if "second" in body:
             self.streaming_timeout = body["second"]
 
-    def update_from_announcement_vol(self, body: dict) -> None:
+    def update_from_announcement_vol(self, body: dict[str, Any]) -> None:
         """Update announcement volume from an 'announcement_vol' event."""
         if "value" in body:
             self.ann_volume = body["value"]
 
-    def update_from_extra_info(self, body: dict) -> None:
+    def update_from_extra_info(self, body: dict[str, Any]) -> None:
         """Update device identity from an MQTT 'extra_info' event.
 
         In direct mode a device identified through its MQTT topics is only
@@ -387,8 +397,7 @@ class UnifiPlayDeviceState:
         if body.get("platform"):
             self.platform = body["platform"]
         if body.get("version"):
-            match = re.search(r"v?(\d+(?:\.\d+)+)", body["version"])
-            self.firmware = match.group(1) if match else body["version"]
+            self.firmware = parse_firmware_version(body["version"])
         if "uptime" in body:
             self.uptime = body["uptime"]
         if "link_quality" in body:
@@ -510,7 +519,9 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
     async def _start_mqtt(self, device_id: str, ip: str, mac: str) -> None:
         """Start an MQTT connection for a device."""
 
-        def _schedule_event(event_name: str, header: dict, body: dict) -> None:
+        def _schedule_event(
+            event_name: str, header: dict[str, Any], body: dict[str, Any]
+        ) -> None:
             self.hass.loop.call_soon_threadsafe(
                 self._handle_event, device_id, event_name, header, body
             )
@@ -525,7 +536,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         self._mqtt_clients[device_id] = client
         try:
             await client.connect()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(POST_CONNECT_SETTLE)
             client.request_info()
             client.request_extra_info()
             client.request_metadata()
@@ -609,7 +620,11 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
 
     @callback
     def _handle_event(
-        self, device_id: str, event_name: str, header: dict, body: dict
+        self,
+        device_id: str,
+        event_name: str,
+        header: dict[str, Any],
+        body: dict[str, Any],
     ) -> None:
         """Process an incoming MQTT event and update state."""
         state = self._device_states.get(device_id)
@@ -646,7 +661,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
 
         self.async_set_updated_data(self._device_states)
 
-    def _update_from_groups(self, device_id: str, body: dict) -> None:
+    def _update_from_groups(self, device_id: str, body: dict[str, Any]) -> None:
         """Process a 'groups' event from device_id, fire topology-change events, and update state.
 
         Groups are tracked per source device so that a groups event from device
@@ -758,7 +773,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         *,
         group_id: str,
         name: str,
-        dev_info: list,
+        dev_info: list[dict[str, Any]],
         group_index: int = 0,
         broadcasting_mode: str = "zone_only",
         wb_enable: bool = False,
@@ -792,7 +807,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         """Remove one zone from every connected device."""
         return self.publish_zones(group_id, None)
 
-    def publish_zones(self, group_id: str, updated: dict | None) -> list[str]:
+    def publish_zones(self, group_id: str, updated: dict[str, Any] | None) -> list[str]:
         """Write a zone change out to EVERY connected device.
 
         ``updated`` is the new wire dict for the zone, or None to delete it.
@@ -816,7 +831,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         """
         from .helpers import gs_to_dict
 
-        groups: list[dict] = []
+        groups: list[dict[str, Any]] = []
         replaced = False
         for gid, gs in self.groups.items():
             if gid != group_id:
@@ -904,7 +919,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
 
     def get_groups_hosted_by(
         self, mac: str, exclude_group_id: str | None = None
-    ) -> list["UnifiPlayGroupState"]:
+    ) -> list[UnifiPlayGroupState]:
         """Return every zone hosted by this MAC, optionally excluding one.
 
         Used when a zone changes hands between hosts: each device's group list
@@ -917,7 +932,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             if _norm_mac(gs.host_mac) == host and gs.group_id != exclude_group_id
         ]
 
-    def get_zone_host_state(self, group_id: str) -> "UnifiPlayDeviceState | None":
+    def get_zone_host_state(self, group_id: str) -> UnifiPlayDeviceState | None:
         """Return the device state for the zone host."""
         gs = self.groups.get(group_id)
         if not gs or not gs.host_mac:
@@ -930,7 +945,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
 
     def get_zone_members(
         self, group_id: str
-    ) -> list[tuple[str, "UnifiPlayDeviceState", "UnifiPlayMqttClient | None"]]:
+    ) -> list[tuple[str, UnifiPlayDeviceState, UnifiPlayMqttClient | None]]:
         """Return (dev_id, state, client) for every member of a zone.
 
         Includes the host device. Members that are offline (no MQTT client)

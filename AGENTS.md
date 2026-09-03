@@ -55,32 +55,70 @@ published and ignored" is what stops the next person re-deriving it.
 ## Commands
 
 ```bash
-pip install pre-commit && pre-commit install   # once per clone
-pre-commit run --all-files --hook-stage pre-commit   # black, isort, json/yaml
-pre-commit run --all-files --hook-stage pre-push     # flake8, client-call check
-python scripts/check_mqtt_client_calls.py            # the guard on its own
-python scripts/check_mqtt_cert_generations.py        # cert-generation fallback, paho stubbed
-python scripts/dump_device.py <DEVICE_IP>            # dump a device's live state
+pip install -r requirements_test_min.txt       # minimum lane: HA 2025.8.0
+pytest                                          # the suite
+pytest --cov --cov-report=json:coverage.json && python scripts/check_coverage.py coverage.json
+mypy custom_components/unifi_play                # strict, against real HA types
+ruff check . && black --check . && isort --check-only . && flake8
+
+pip install pre-commit && pre-commit install    # once per clone
+pre-commit run --all-files --hook-stage pre-commit   # black, isort, ruff, json/yaml
+pre-commit run --all-files --hook-stage pre-push     # flake8, guards, coverage
+
+python scripts/check_mqtt_client_calls.py       # the guard on its own
+python scripts/check_mqtt_cert_generations.py   # cert-generation fallback, paho stubbed
+python scripts/check_min_ha_version.py --expect-min   # import smoke + floor check
+python scripts/dump_device.py <DEVICE_IP>       # dump a device's live state
 ```
 
-Python 3.13, matching CI and Home Assistant. `__init__.py` uses `type X = Y`,
-so older interpreters cannot parse the package at all.
+Two supported lanes, both run in CI and both must stay green:
 
-## There is no test suite
+| Lane | Home Assistant | Python | Requirements |
+|---|---|---|---|
+| minimum | 2025.8.0 (the floor in `hacs.json`) | 3.13 | `requirements_test_min.txt` |
+| latest | whatever `requirements_test_latest.txt` pins | 3.14 | `requirements_test_latest.txt` |
 
-Nothing is mocked and there are no unit tests. "Verified" here means one of:
+Changing the minimum means changing `hacs.json`, the README and
+`requirements_test_min.txt` together — `scripts/check_min_ha_version.py`
+fails the build if the declared floor and the tested release disagree.
+
+## Testing
+
+There is a suite now, and three seams, and no others:
+
+- **`paho.mqtt.client.Client`** — replaced by `tests/fake_mqtt.py`. Binme
+  framing, the certificate-generation fallback, CONNACK handling and the
+  coordinator's dispatch all run for real above it.
+- **`discovery.async_discover`** — the UDP socket. `async_resolve_direct` and
+  the MQTT identification fallback still run for real.
+- **`aioclient_mock`** — Home Assistant's own aiohttp mocker, standing in for
+  a console's Apollo API.
+
+Reach for `patch.object` on an integration method and you are testing the
+patch: both bugs this repository is named for — a deleted client method, a
+zone written to one device — would have survived that.
+
+Captured payloads live in `tests/fixtures/` with provenance recorded in
+`tests/fixtures/PROVENANCE.md`: model, firmware, capture source, and which
+parts of the meaning were verified on hardware rather than merely observed.
+**Do not invent a fixture to make a test pass.** A payload made up to fit an
+assertion encodes a guess as a fact and then defends it.
+
+Coverage is gated per module, not just overall: 95% for every production
+module, 100% for `config_flow.py`. While the suite is still being built out
+the gate is ratcheted against `scripts/coverage_floors.json` — coverage may
+rise, never fall.
+
+"Verified" still means one of:
 
 1. **Against hardware** — state a model and firmware version.
-2. **Statically** — `scripts/check_mqtt_client_calls.py`,
-   `scripts/check_mqtt_cert_generations.py`, or reasoning from a captured
-   payload in `docs/api.md`.
+2. **Statically** — the guard scripts, or reasoning from a captured payload
+   in `docs/api.md`.
+3. **By test** — name the test.
 
-Do not claim a change is tested because it lints. If you could not exercise
-something, say so plainly and say what would exercise it — the git history is
-full of contributors doing exactly that, and it is what makes review possible.
-
-Be especially careful with `config_flow.py`: it is the largest module, drives
-all zone management, and has no coverage of any kind.
+Do not claim a change is tested because it lints, and do not claim hardware
+verification a test gave you. If you could not exercise something, say so
+plainly and say what would exercise it.
 
 ## Traps that have caused shipped bugs
 

@@ -7,84 +7,226 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Nothing here writes to the repository. Jobs that need more say so
+# themselves; there are none.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned to a full commit SHA, not a tag. A tag is a moving
+# pointer the action's owner can repoint at any time, which is a supply-chain
+# write into every job that resolves it. The comment after each SHA records
+# which release it was, so Dependabot's bumps stay reviewable.
+env:
+  # The minimum lane. Kept here so the floor is stated once and every job
+  # that needs it reads the same value; scripts/check_min_ha_version.py
+  # asserts it against hacs.json.
+  MIN_PYTHON: "3.13"
+  LATEST_PYTHON: "3.14"
+
 jobs:
-  validate:
-    name: Code Quality Checks
+  lint:
+    name: Format and lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: ${{ env.MIN_PYTHON }}
+          cache: pip
+          cache-dependency-path: requirements_test*.txt
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install flake8 black isort
+      - name: Install tooling
+        run: pip install -r requirements_test.txt
 
-      - name: Check code formatting with Black
-        run: |
-          black --check custom_components/unifi_play/
+      - name: Black
+        run: black --check --diff custom_components/unifi_play/ tests/ scripts/
 
-      - name: Check import sorting with isort
-        run: |
-          isort --check-only custom_components/unifi_play/
+      - name: isort
+        run: isort --check-only --diff custom_components/unifi_play/ tests/ scripts/
 
-      - name: Lint with flake8
-        run: |
-          flake8 custom_components/unifi_play/ --count --select=E9,F63,F7,F82 --show-source --statistics
-          flake8 custom_components/unifi_play/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      - name: Ruff
+        run: ruff check custom_components/unifi_play/ tests/ scripts/
 
-      # flake8's selection above catches undefined names, never a missing
-      # attribute on an object it cannot type - which is how v1.2.0 shipped
-      # calling two methods that no longer existed (#13).
-      - name: Check MQTT client calls resolve
-        run: |
-          python scripts/check_mqtt_client_calls.py
+      # Kept alongside Ruff rather than replaced by it: the two disagree often
+      # enough to be worth both, and this one now exits non-zero instead of
+      # the advisory --exit-zero pass it replaces.
+      - name: flake8
+        run: flake8 custom_components/unifi_play/ tests/ scripts/
 
-      # Control flow in connect(), not a missing method: the client-call
-      # guard cannot see it, and the failure shapes cannot be produced on
-      # demand against hardware.
-      - name: Check MQTT cert-generation fallback
-        run: |
-          python scripts/check_mqtt_cert_generations.py
+  protocol-guards:
+    name: Protocol guards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # A zone written with "host" set forms on every device and then plays
-      # in one room only (#22). The failure needs two speakers to observe, so
-      # nothing here can catch it dynamically - and a pre-push hook alone
-      # misses anyone without hooks installed, or an edit made in the web UI.
-      - name: Check set_groups payload
-        run: |
-          python scripts/check_set_groups_payload.py
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.MIN_PYTHON }}
+
+      # flake8 catches undefined names, never a missing attribute on an object
+      # it cannot type - which is how v1.2.0 shipped calling two methods that
+      # no longer existed (#13).
+      - name: MQTT client calls resolve
+        run: python scripts/check_mqtt_client_calls.py
+
+      # Control flow in connect(), not a missing method: the client-call guard
+      # cannot see it, and the failure shapes cannot be produced on demand
+      # against hardware.
+      - name: MQTT cert-generation fallback
+        run: python scripts/check_mqtt_cert_generations.py
+
+      # A zone written with "host" set forms on every device and then plays in
+      # one room only (#22). The failure needs two speakers to observe, so
+      # nothing here can catch it dynamically.
+      - name: set_groups payload
+        run: python scripts/check_set_groups_payload.py
 
       # The cert-generation fallback shipped in mqtt_client only; discovery
       # built its own paho client with the 2023 pair hardcoded, so an Audio
       # Port on rotated firmware could not be set up at all (#24).
-      - name: Check cert-generation call sites
-        run: |
-          python scripts/check_cert_generation_users.py
+      - name: Cert-generation call sites
+        run: python scripts/check_cert_generation_users.py
 
-  hacs:
-    name: HACS Validation
+  test:
+    name: Tests (HA ${{ matrix.lane }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The floor declared in hacs.json. A minimum nobody runs is not a
+          # minimum, so this lane is not optional and not allowed to fail.
+          - lane: minimum
+            python: "3.13"
+            requirements: requirements_test_min.txt
+            coverage: true
+          # The newest stable release. Catches a deprecation before a user's
+          # monthly update does.
+          - lane: latest
+            python: "3.14"
+            requirements: requirements_test_latest.txt
+            coverage: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: ${{ matrix.requirements }}
+
+      - name: Install dependencies
+        run: pip install -r ${{ matrix.requirements }}
+
+      - name: Run tests
+        run: pytest --cov --cov-report=term-missing --cov-report=json:coverage.json
+
+      # Only on the minimum lane: the two lanes cover slightly different
+      # branches (a deprecation shim taken on one and not the other), and
+      # gating on whichever ran last would make the threshold depend on
+      # scheduling.
+      # Ratcheted against scripts/coverage_floors.json while the suite is
+      # being built out: coverage may rise, never fall. The floors file is
+      # deleted and --strict becomes the default once every module clears
+      # 95% (100% for the config flow).
+      - name: Per-module coverage gate
+        if: matrix.coverage
+        run: python scripts/check_coverage.py coverage.json
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ matrix.lane }}
+          path: coverage.json
+          if-no-files-found: ignore
+
+  typecheck:
+    name: mypy (strict)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.MIN_PYTHON }}
+          cache: pip
+          cache-dependency-path: requirements_test*.txt
+
+      # Against the real Home Assistant package, not stubs: the point is to
+      # catch a signature that changed under us, and a stub tracks whatever
+      # was true when it was written.
+      - name: Install dependencies
+        run: pip install -r requirements_test_min.txt
+
+      - name: mypy
+        run: mypy custom_components/unifi_play
+
+  import-smoke:
+    name: Import smoke (HA ${{ matrix.lane }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: minimum
+            python: "3.13"
+            requirements: requirements_test_min.txt
+            expect_min: "--expect-min"
+          - lane: latest
+            python: "3.14"
+            requirements: requirements_test_latest.txt
+            expect_min: ""
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: ${{ matrix.requirements }}
+
+      - name: Install dependencies
+        run: pip install -r ${{ matrix.requirements }}
+
+      # Imports every module and, on the minimum lane, asserts the floor
+      # declared in hacs.json is the release actually being tested.
+      - name: Import and version consistency
+        run: python scripts/check_min_ha_version.py ${{ matrix.expect_min }}
+
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: HACS validation
-        uses: hacs/action@main
+        uses: hacs/action@d556e736723344f83838d08488c983a15381059a # 22.5.0
         with:
           category: integration
 
   hassfest:
-    name: Hassfest Validation
+    name: Hassfest validation
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Hassfest validation
-        uses: home-assistant/actions/hassfest@master
+        uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb # 2026-08-12

@@ -1,0 +1,45 @@
+version: 2
+
+updates:
+  # Every action is pinned to a full commit SHA (see ci.yaml). That closes the
+  # supply-chain hole a floating tag leaves open, but it also means nothing
+  # updates on its own - a pinned SHA never picks up a security fix. Dependabot
+  # is the other half of that trade: it proposes the bump, a human reviews it,
+  # and the version comment beside each SHA stays truthful.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+
+  # The test lanes are pinned exactly, including
+  # pytest-homeassistant-custom-component, which decides which Home Assistant
+  # release each lane runs. A bump to requirements_test_latest.txt is a new
+  # Home Assistant release to test against; a bump to requirements_test_min.txt
+  # is a change of the supported floor and needs hacs.json and the README
+  # changed with it (scripts/check_min_ha_version.py enforces the first half).
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - dependencies
+    groups:
+      # One PR for the linters: they move together and a five-PR week of
+      # formatter bumps is noise nobody reads.
+      lint-tooling:
+        patterns:
+          - black
+          - flake8
+          - isort
+          - mypy
+          - ruff

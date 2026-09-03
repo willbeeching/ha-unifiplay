@@ -25,14 +25,21 @@ repos:
     rev: 26.5.1
     hooks:
       - id: black
-        files: ^custom_components/unifi_play/
+        files: ^(custom_components/unifi_play/|tests/|scripts/)
         stages: [pre-commit]
 
   - repo: https://github.com/PyCQA/isort
-    rev: 8.0.1
+    rev: 9.0.1
     hooks:
       - id: isort
-        files: ^custom_components/unifi_play/
+        files: ^(custom_components/unifi_play/|tests/|scripts/)
+        stages: [pre-commit]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.5
+    hooks:
+      - id: ruff
+        files: ^(custom_components/unifi_play/|tests/|scripts/)
         stages: [pre-commit]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -49,10 +56,11 @@ repos:
     rev: 7.3.0
     hooks:
       - id: flake8
-        # The same selection CI blocks on. The wider run in CI is --exit-zero
-        # and advisory, so it is deliberately not mirrored here.
-        args: [--count, "--select=E9,F63,F7,F82", --show-source, --statistics]
-        files: ^custom_components/unifi_play/
+        # The same run CI blocks on, reading .flake8 for its configuration.
+        # It is no longer the narrow --select pass: CI stopped running the
+        # wider one with --exit-zero, so this has to be the real gate.
+        args: [--count, --show-source, --statistics]
+        files: ^(custom_components/unifi_play/|tests/|scripts/)
         stages: [pre-push]
 
   - repo: local
@@ -81,6 +89,16 @@ repos:
         # A hardcoded pair cannot reach a device whose CA has rotated, and
         # under TLS 1.3 the rejection is silent (#24).
         entry: python3.13 scripts/check_cert_generation_users.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      - id: coverage-gate
+        name: per-module coverage
+        # The suite has to run to produce a report, so this is a push-time
+        # hook rather than a commit-time one. It enforces the floors in
+        # scripts/coverage_floors.json: coverage may rise, never fall.
+        entry: bash -c 'pytest -q --cov --cov-report=json:coverage.json >/dev/null && python3.13 scripts/check_coverage.py coverage.json'
         language: system
         pass_filenames: false
         always_run: true

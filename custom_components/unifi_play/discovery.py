@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import socket
 import ssl
 import threading
@@ -31,7 +30,7 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
-from .const import MQTT_PORT, TOPIC_MOBILE
+from .const import MQTT_PORT, TOPIC_MOBILE, parse_firmware_version
 from .mqtt_client import (
     CONNACK_TIMEOUT,
     CertGeneration,
@@ -54,9 +53,6 @@ _TLV_FWVERSION = 0x03
 _TLV_HOSTNAME = 0x0B
 _TLV_PLATFORM = 0x0C
 _TLV_MODEL = 0x15
-
-# "UPL-AMP.qcs405.v1.0.38.37ed30f.260312.07:19:19" -> "1.0.38"
-_FW_VERSION_RE = re.compile(r"\.v(\d+(?:\.\d+)+)\.")
 
 
 def _parse_response(data: bytes, source_ip: str) -> dict[str, Any] | None:
@@ -88,7 +84,7 @@ def _parse_response(data: bytes, source_ip: str) -> dict[str, Any] | None:
 def _is_play_device(parsed: dict[str, Any]) -> bool:
     platform = parsed.get("platform", "")
     model = parsed.get("model", "")
-    return platform.startswith("UPL") or model.startswith("UPL")
+    return bool(platform.startswith("UPL") or model.startswith("UPL"))
 
 
 def _to_device_dict(parsed: dict[str, Any]) -> dict[str, Any]:
@@ -97,13 +93,18 @@ def _to_device_dict(parsed: dict[str, Any]) -> dict[str, Any]:
     The coordinator's UnifiPlayDeviceState consumes either interchangeably;
     in direct mode the MAC doubles as the device id.
     """
-    fw_match = _FW_VERSION_RE.search(parsed.get("fwversion", ""))
+    raw_version = parsed.get("fwversion", "")
+    version = parse_firmware_version(raw_version)
     return {
         "id": parsed["mac"],
         "name": parsed.get("hostname", "UniFi Play"),
         "mac": parsed["mac"],
         "platform": parsed.get("platform", parsed.get("model", "UPL")),
-        "firmware": fw_match.group(1) if fw_match else "",
+        # An unparseable build string is dropped here rather than shown: the
+        # UDP sweep is the one path where a later extra_info event will
+        # replace it anyway, and a hostname-shaped value in the version field
+        # of the device registry is worse than an empty one.
+        "firmware": version if version != raw_version else "",
         "ip": parsed["ip"],
     }
 

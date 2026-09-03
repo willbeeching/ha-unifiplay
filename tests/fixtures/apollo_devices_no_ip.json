@@ -1,0 +1,17 @@
+{
+  "err": null,
+  "type": "collection",
+  "data": [
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "name": "Kitchen",
+      "mac": "AA:BB:CC:DD:EE:11",
+      "platform": "UPL-PORT",
+      "firmware": "1.1.10",
+      "state": "MANAGED_BY_OTHER"
+    }
+  ],
+  "offset": 0,
+  "limit": 0,
+  "total": 1
+}

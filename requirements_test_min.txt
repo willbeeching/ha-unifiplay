@@ -1,0 +1,8 @@
+# Minimum supported Home Assistant lane.
+#
+# pytest-homeassistant-custom-component 0.13.269 pins homeassistant==2025.8.0,
+# which is the floor declared in hacs.json and manifest.json. Bumping this
+# file is a deliberate change of the minimum supported release: update
+# hacs.json, the README compatibility table and docs/testing.md with it.
+-r requirements_test.txt
+pytest-homeassistant-custom-component==0.13.269

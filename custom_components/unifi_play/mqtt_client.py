@@ -134,7 +134,7 @@ def bundled_generations() -> list[CertGeneration]:
     ]
 
 
-def encode_binme(header: dict, body: dict) -> bytes:
+def encode_binme(header: dict[str, Any], body: dict[str, Any]) -> bytes:
     """Encode header + body dicts into the Binme binary wire format."""
     header_bytes = json.dumps(header).encode("utf-8")
     body_bytes = json.dumps(body).encode("utf-8")
@@ -185,7 +185,7 @@ class UnifiPlayMqttClient:
         self,
         device_ip: str,
         device_mac: str,
-        on_event: Callable[[str, dict, dict], None] | None = None,
+        on_event: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
         on_connection: Callable[[], None] | None = None,
     ) -> None:
         self._device_ip = device_ip
@@ -195,17 +195,39 @@ class UnifiPlayMqttClient:
         self._client_uuid = uuid.uuid4().hex[:12]
         self._pub_topic = f"{TOPIC_MOBILE}/{self._client_uuid}/action"
         self._client: mqtt.Client | None = None
-        self._loop_task: asyncio.Task | None = None
+        self._loop_task: asyncio.Task[None] | None = None
         self._connected = asyncio.Event()
         # Set on any CONNACK so a failure code can wake ``_connect_with``
         # without being mistaken for acceptance. ``_connected`` is only set
         # when the reason code is success.
         self._connack_done = asyncio.Event()
         self._connack_rc: Any = None
+        # The event loop these events belong to, captured when the connection
+        # is dialled. paho's callbacks arrive on another thread and must not
+        # touch an asyncio primitive directly - see ``_signal``.
+        self._event_loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def is_connected(self) -> bool:
         return self._client is not None and self._client.is_connected()
+
+    def _signal(self, event: asyncio.Event, *, set_it: bool) -> None:
+        """Set or clear an ``asyncio.Event`` from a paho callback thread.
+
+        Every callback below runs inside ``loop()``, on an executor thread.
+        ``asyncio.Event.set()`` is not thread-safe: it resolves the waiting
+        futures, and resolving a future schedules its callbacks with
+        ``loop.call_soon``, which assumes it is on the loop's own thread.
+
+        Without a running loop the event is touched directly, which is only
+        reachable from a client that was never dialled.
+        """
+        loop = self._event_loop
+        action = event.set if set_it else event.clear
+        if loop is None or loop.is_closed():
+            action()
+            return
+        loop.call_soon_threadsafe(action)
 
     def _on_connect(
         self,
@@ -221,14 +243,14 @@ class UnifiPlayMqttClient:
             # A failure CONNACK is a rejection, not a connection. Setting
             # ``_connected`` here would cache this generation and skip the
             # rest of CERT_GENERATIONS.
-            self._connack_done.set()
+            self._signal(self._connack_done, set_it=True)
             return
         # Wildcard on the platform segment: PowerAmps publish under UPL-AMP,
         # other hardware under its own prefix (UPL-DEVICE, UPL-PORT, ...), and
         # the broker is the device itself so this matches only its own topics.
         client.subscribe(f"+/{self._device_mac}/status")
-        self._connected.set()
-        self._connack_done.set()
+        self._signal(self._connected, set_it=True)
+        self._signal(self._connack_done, set_it=True)
         if self._on_connection:
             self._on_connection()
 
@@ -241,7 +263,7 @@ class UnifiPlayMqttClient:
         properties: Any = None,
     ) -> None:
         _LOGGER.debug("MQTT disconnected from %s: %s", self._device_ip, rc)
-        self._connected.clear()
+        self._signal(self._connected, set_it=False)
         if self._on_connection:
             self._on_connection()
 
@@ -351,6 +373,7 @@ class UnifiPlayMqttClient:
         self._client.on_message = self._on_message
 
         loop = asyncio.get_running_loop()
+        self._event_loop = loop
         self._connected.clear()
         self._connack_done.clear()
         self._connack_rc = None
@@ -380,10 +403,13 @@ class UnifiPlayMqttClient:
             await loop.run_in_executor(None, self._client.loop, 0.5)
             await asyncio.sleep(0.01)
 
-    def publish_action(self, action: str, body: dict | None = None) -> None:
+    def publish_action(self, action: str, body: dict[str, Any] | None = None) -> None:
         """Send a command to the device."""
         if not self.is_connected:
             _LOGGER.warning("Cannot publish, MQTT not connected to %s", self._device_ip)
+            return
+        client = self._client
+        if client is None:  # pragma: no cover - is_connected already proved it
             return
         _LOGGER.debug("Publishing action '%s' to %s", action, self._device_ip)
         header = {
@@ -393,7 +419,7 @@ class UnifiPlayMqttClient:
             "action": action,
         }
         payload = encode_binme(header, body or {})
-        self._client.publish(self._pub_topic, payload)
+        client.publish(self._pub_topic, payload)
 
     def request_info(self) -> None:
         """Request current device info."""

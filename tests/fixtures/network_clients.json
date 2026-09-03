@@ -1,0 +1,8 @@
+{
+  "meta": {"rc": "ok"},
+  "data": [
+    {"mac": "aabbccddee11", "ip": "192.168.1.101", "hostname": "Kitchen"},
+    {"mac": "aabbccddee22", "last_ip": "192.168.1.102", "hostname": "Study"},
+    {"mac": "aabbccddee33", "hostname": "No lease"}
+  ]
+}

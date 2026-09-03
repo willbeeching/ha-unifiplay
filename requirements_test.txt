@@ -1,0 +1,17 @@
+# Lint and type-check tooling, shared by every test lane.
+#
+# Pinned exactly, and bumped by Dependabot rather than by hand: a formatter
+# or linter that floats turns an unrelated CI run red on a day nobody touched
+# the code. The pytest stack is deliberately absent - it comes from
+# pytest-homeassistant-custom-component, which pins it to match the Home
+# Assistant release under test, and a second pin here would fight it.
+black==26.5.1
+flake8==7.3.0
+isort==9.0.1
+mypy==2.3.1
+ruff==0.16.5
+
+# mypy needs the runtime dependency present to check calls into it. paho-mqtt
+# ships no py.typed marker, so this only stops mypy failing on the import;
+# the range matches manifest.json.
+paho-mqtt==2.1.0

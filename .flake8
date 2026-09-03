@@ -1,0 +1,25 @@
+[flake8]
+# Black owns line breaking and whitespace-before-punctuation, so the codes it
+# disagrees with are off here rather than fought over. Everything else is a
+# real gate: this exits non-zero, unlike the --exit-zero pass it replaces.
+max-line-length = 88
+extend-ignore = E203, E501, W503, E704
+# 35 accommodates UnifiPlayDeviceState.update_from_info, which is a flat
+# chain of "if this key is present, copy it" - a cyclomatic score of 31 with
+# no nesting and nothing to untangle. Anything genuinely branchy stays well
+# under.
+max-complexity = 35
+exclude =
+    .git,
+    __pycache__,
+    build,
+    dist,
+    .venv,
+    venv
+per-file-ignores =
+    tests/*: E402
+    # async_register_services is one long registration table with a closure
+    # per action. PR5 moves registration to async_setup and splits it; until
+    # then the score says "this file has a lot of services", not "this
+    # function is hard to follow".
+    custom_components/unifi_play/services.py: C901

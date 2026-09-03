@@ -1,0 +1,8 @@
+# Latest stable Home Assistant lane.
+#
+# Pinned so a Home Assistant release cannot turn CI red on a day nobody
+# touched this repository; Dependabot proposes the bump and the bump is
+# reviewed like any other change. pytest-homeassistant-custom-component
+# 0.13.363 pins homeassistant==2026.9.0, which requires Python 3.14.
+-r requirements_test.txt
+pytest-homeassistant-custom-component==0.13.363

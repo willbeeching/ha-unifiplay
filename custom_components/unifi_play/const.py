@@ -18,6 +18,8 @@ jacks the amp lacks, and the amp accepts ``spdif`` without having anywhere to
 route it, so a merged map would offer inputs that silently do nothing.
 """
 
+import re
+
 DOMAIN = "unifi_play"
 
 CONF_CONTROLLER_HOST = "controller_host"
@@ -145,6 +147,36 @@ def source_value(platform: str, label: str) -> str | None:
         if lbl == label:
             return value
     return None
+
+
+# Firmware version strings, in the two shapes the hardware reports.
+#
+# The build string is dotted end to end -
+# "UPL-AMP.qcs405.v1.0.38.37ed30f.260312.07:19:19" - and the commit hash that
+# follows the version starts with a digit often enough that an unanchored
+# "digits and dots" match swallows part of it: that exact string yields
+# "1.0.38.37", and the Port's yields "1.1.10.9". Requiring a dot on both
+# sides of the version is what stops it, because the character after the
+# real version is always the start of a hash.
+_FIRMWARE_BUILD_RE = re.compile(r"\.v(\d+(?:\.\d+)+)\.")
+#: Apollo's own ``firmware`` field is already just the version.
+_FIRMWARE_PLAIN_RE = re.compile(r"^v?(\d+(?:\.\d+)+)$")
+
+
+def parse_firmware_version(raw: str) -> str:
+    """Extract the version from whatever shape the device reported.
+
+    Returns ``raw`` unchanged when neither shape matches: an unrecognised
+    string is worth showing, because it is the only clue about a format
+    nobody has seen.
+    """
+    if not raw:
+        return ""
+    for pattern in (_FIRMWARE_BUILD_RE, _FIRMWARE_PLAIN_RE):
+        match = pattern.search(raw)
+        if match:
+            return match.group(1)
+    return raw
 
 
 BINME_TYPE_HEADER = 0x01

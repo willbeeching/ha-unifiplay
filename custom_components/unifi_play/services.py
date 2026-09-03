@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import posixpath
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -29,6 +30,9 @@ from .helpers import (
 from .mqtt_client import UnifiPlayMqttClient
 
 ATTR_DEVICE_ID = "device_id"
+
+#: Every service handler below has this shape.
+_ServiceHandler = Callable[[ServiceCall], Coroutine[Any, Any, None]]
 
 # Kept in step with services.yaml and the services block in strings.json.
 SERVICE_NAMES = (
@@ -57,7 +61,9 @@ SERVICE_NAMES = (
 
 WEEKDAYS = vol.All(cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(0, 6))])
 
-_DEVICE = {vol.Required(ATTR_DEVICE_ID): cv.string}
+# Annotated because the keys are voluptuous markers, not strings: without
+# this, every schema built by unpacking it is an un-inferrable dict.
+_DEVICE: dict[Any, Any] = {vol.Required(ATTR_DEVICE_ID): cv.string}
 
 PLAY_ANNOUNCEMENT_SCHEMA = vol.Schema(
     {
@@ -116,7 +122,7 @@ RENAME_EQ_PRESET_SCHEMA = vol.Schema(
 
 # Zone management schemas. Zone services target zone entities (media_player.*
 # created by UnifiPlayZonePlayer) rather than individual device IDs.
-_ZONE = {vol.Required("entity_id"): cv.entity_id}
+_ZONE: dict[Any, Any] = {vol.Required("entity_id"): cv.entity_id}
 
 _NAME = vol.All(cv.string, vol.Length(min=1, max=255))
 _FILENAME = vol.All(cv.string, vol.Length(min=1, max=255))
@@ -490,7 +496,7 @@ def async_register_services(hass: HomeAssistant) -> None:
             if client:
                 client.stop_announcement()
 
-    handlers: list[tuple[str, Callable, vol.Schema]] = [
+    handlers: list[tuple[str, _ServiceHandler, vol.Schema]] = [
         ("play_announcement", play_announcement, PLAY_ANNOUNCEMENT_SCHEMA),
         ("stop_announcement", stop_announcement, STOP_SCHEMA),
         ("delete_announcement_file", delete_announcement_file, DELETE_FILE_SCHEMA),

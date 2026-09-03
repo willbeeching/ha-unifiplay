@@ -201,7 +201,7 @@ class UnifiPlayInZoneSensor(UnifiPlayEntity, BinarySensorEntity):
         super().__init__(coordinator, device_id)
         self._attr_unique_id = f"unifi_play_{self._device_state.mac}_in_zone"
 
-    def _zone(self) -> "UnifiPlayGroupState | None":
+    def _zone(self) -> UnifiPlayGroupState | None:
         """The zone this device belongs to, if any."""
         mac = mac_normalise(self._device_state.mac)
         for gs in self.coordinator.groups.values():
@@ -261,7 +261,7 @@ class UnifiPlayZoneWidebandSensor(
         return self._group_id
 
     @property
-    def _group(self):
+    def _group(self) -> UnifiPlayGroupState | None:
         return self.coordinator.groups.get(self._group_id)
 
     @property
