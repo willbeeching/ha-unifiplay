@@ -28,7 +28,7 @@ from custom_components.unifi_play.const import (
 )
 
 from .conftest import ApolloServer
-from .const import API_KEY, CONSOLE_HOST, amp_device
+from .const import API_KEY, CONSOLE_HOST, amp_device, third_device
 from .fake_mqtt import FakeDevice
 
 
@@ -440,6 +440,47 @@ async def test_direct_mode_can_only_be_configured_once(
     )
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+
+
+async def test_direct_setup_refuses_speakers_a_console_entry_already_has(
+    hass: HomeAssistant,
+    setup_console: MockConfigEntry,
+    udp_discovery,
+    amp: FakeDevice,
+    port: FakeDevice,
+) -> None:
+    """The mirror of the console case, and not covered by it.
+
+    The two modes have genuinely different unique IDs (a console address, and
+    the literal "direct"), so nothing before this point can notice that they
+    reach the same hardware.
+    """
+    result = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": MODE_DIRECT}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_MANUAL_HOSTS: ""}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured_device"
+
+
+async def test_two_entries_reaching_different_speakers_are_allowed(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    apollo: ApolloServer,
+    third: FakeDevice,
+) -> None:
+    """The check is about overlapping hardware, not about a second entry.
+
+    A console that has been given its own speakers is a normal arrangement,
+    and refusing it would make the overlap guard a limit on how many entries
+    somebody may have.
+    """
+    apollo.devices({"err": None, "data": [third_device()]})
+    result = await _console(hass)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
 # ── Reauth ────────────────────────────────────────────────────────────────

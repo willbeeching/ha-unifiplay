@@ -465,6 +465,38 @@ async def test_a_direct_host_list_that_reaches_nothing_is_refused(
     assert direct_entry.data[CONF_MANUAL_HOSTS] == []
 
 
+async def test_a_discovery_socket_failure_during_reconfigure(
+    hass: HomeAssistant,
+    direct_entry: MockConfigEntry,
+    udp_discovery,
+    mqtt_network: FakeMqttNetwork,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """A socket that will not open is not an empty network.
+
+    Reported as its own error rather than "nothing answered", which would
+    send the user off checking IP addresses that are fine.
+    """
+    direct_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(direct_entry.entry_id)
+    await settle(hass)
+
+    result = await direct_entry.start_reconfigure_flow(hass)
+    with patch(
+        "custom_components.unifi_play.config_flow.async_resolve_direct",
+        side_effect=OSError("no socket"),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_MANUAL_HOSTS: THIRD_IP}
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "discovery_failed"}
+    assert direct_entry.data[CONF_MANUAL_HOSTS] == []
+
+
 async def test_reconfigure_refuses_a_console_another_entry_already_has(
     hass: HomeAssistant,
     console_entry: MockConfigEntry,
