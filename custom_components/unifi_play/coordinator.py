@@ -524,6 +524,11 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # Consecutive authoritative absences, keyed by device_id. Reset
         # whenever a successful poll lists the speaker again.
         self._discovery_misses: dict[str, int] = {}
+        # True while this coordinator has the overlap repair open. The
+        # issue registry is left alone until then: creating or deleting
+        # an issue schedules a store write, and a reload that has not
+        # finished yet would otherwise leave a lingering timer.
+        self._overlap_issue_open = False
 
     async def _async_update_data(self) -> dict[str, UnifiPlayDeviceState]:
         """Fetch the device list and return current state dict.
@@ -859,7 +864,9 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         """
         issue_id = self._overlap_issue_id()
         if not overlapped:
-            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            if self._overlap_issue_open:
+                ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+                self._overlap_issue_open = False
             return
         names = ", ".join(sorted({name for name, _title in overlapped.values()}))
         other = next(iter(overlapped.values()))[1]
@@ -872,6 +879,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             translation_key="speakers_already_covered",
             translation_placeholders={"names": names, "entry": other},
         )
+        self._overlap_issue_open = True
 
     @callback
     def _handle_event(
