@@ -33,7 +33,7 @@ from custom_components.unifi_play.mqtt_client import (
 )
 
 from .conftest import entry_coordinator, pump
-from .const import AMP_ID, AMP_IP, AMP_MAC, PORT_ID
+from .const import AMP_ID, AMP_IP, AMP_MAC, PORT_ID, PORT_IP, PORT_MAC, amp_device
 from .fake_mqtt import FakeDevice, FakeMqttNetwork
 
 
@@ -251,6 +251,57 @@ async def test_a_client_that_is_retrying_is_left_alone(
 
     assert coordinator.get_mqtt_client(AMP_ID) is client
     assert amp.connect_attempts == 1
+
+
+async def test_a_udp_silent_port_whose_client_gave_up_is_found_again(
+    hass: HomeAssistant,
+    direct_entry: MockConfigEntry,
+    udp_discovery,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """Audio Port does not answer UDP, so a stood-down client used to stay dead.
+
+    The five-minute poll used to call ``_ensure_mqtt`` only for speakers
+    the sweep just returned. A retained Port is excluded from that sweep's
+    MQTT identification fallback (we already know its MAC), so the client
+    that had exhausted its reconnects never got rebuilt.
+    """
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+    from custom_components.unifi_play.const import CONF_MANUAL_HOSTS
+    from custom_components.unifi_play.coordinator import DISCOVERY_INTERVAL
+
+    udp_discovery[:] = [amp_device()]
+    direct_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        direct_entry,
+        data={**direct_entry.data, CONF_MANUAL_HOSTS: [PORT_IP]},
+    )
+    assert await hass.config_entries.async_setup(direct_entry.entry_id)
+    await settle(hass)
+
+    coordinator = entry_coordinator(hass, direct_entry)
+    # MQTT identification uses the MAC as the device id; UDP discovery
+    # would have used the fixture's UUID. Either way the client is the
+    # one keyed on this speaker.
+    first = coordinator.get_mqtt_client_for_mac(PORT_MAC)
+    assert first is not None and first.is_connected
+
+    port.drop()
+    await settle(hass)
+    port.fail_reconnect(times=RECONNECT_ATTEMPT_LIMIT)
+    await pump()
+    assert first.is_retrying is False
+
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+
+    rebuilt = coordinator.get_mqtt_client_for_mac(PORT_MAC)
+    assert rebuilt is not None and rebuilt is not first
+    assert rebuilt.is_connected
 
 
 async def test_a_client_that_gave_up_is_rebuilt(

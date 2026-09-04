@@ -560,7 +560,19 @@ class UnifiPlayMqttClient:
             "action": action,
         }
         payload = encode_binme(header, body or {})
-        client.publish(self._pub_topic, payload)
+        info = client.publish(self._pub_topic, payload)
+        # is_connected can be true and the socket still gone by the time
+        # paho tries to write: publish then returns MQTT_ERR_NO_CONN
+        # without raising. Treating that as success is what made a
+        # mid-write disconnect look like a completed zone document.
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            _LOGGER.warning(
+                "MQTT publish of %s to %s failed: rc=%s",
+                action,
+                self._device_ip,
+                info.rc,
+            )
+            return False
         return True
 
     def request_info(self) -> None:

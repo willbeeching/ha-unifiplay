@@ -145,10 +145,12 @@ async def async_remove_config_entry_device(
     decides whether to accept it.
 
     It is accepted when the device is absent from what the integration
-    currently knows: a speaker whose MAC no coordinator reports, or a zone no
-    speaker reports. Refusing while it is still present is what stops a
-    delete that immediately comes back on the next poll, leaving a device
-    with no entities.
+    currently knows: a speaker whose MAC no coordinator reports as current,
+    or a zone no speaker reports. One missed scan is not enough — Audio
+    Port never answers UDP — but consecutive authoritative absences make a
+    retained speaker deletable. Refusing while it is still current is what
+    stops a delete that immediately comes back on the next poll, leaving a
+    device with no entities.
     """
     coordinator = entry.runtime_data
 
@@ -160,8 +162,13 @@ async def async_remove_config_entry_device(
                 return False
             continue
         known = {
-            mac_normalise(state.mac) for state in coordinator.data.values() if state.mac
+            mac_normalise(state.mac)
+            for state in coordinator.data.values()
+            if state.mac and coordinator.device_is_current(state.device_id)
         }
         if mac_normalise(identifier) in known:
             return False
+        for device_id, state in list(coordinator.data.items()):
+            if state.mac and mac_normalise(state.mac) == mac_normalise(identifier):
+                await coordinator.async_forget_device(device_id)
     return True

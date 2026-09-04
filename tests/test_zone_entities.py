@@ -351,6 +351,31 @@ async def test_every_zone_property_survives_the_zone_going(
     assert entity.extra_state_attributes == {}
     assert entity.device_info["identifiers"] == {(DOMAIN, "zone_gone-zone-id")}
     assert "via_device" not in entity.device_info
+    assert "via_device_id" not in entity.device_info
+
+
+async def test_a_zone_is_linked_through_its_host(
+    hass: HomeAssistant, synced_zone: MockConfigEntry
+) -> None:
+    """2026.9 wants via_device_id; the 2025.8 floor still uses via_device."""
+    from homeassistant.helpers import device_registry as dr
+
+    entity = entity_object(hass, ZONE_PLAYER)
+    assert isinstance(entity, UnifiPlayZonePlayer)
+    info = entity.device_info
+    identifier = (DOMAIN, AMP_MAC)
+    if "via_device_id" in info:
+        host = next(
+            device
+            for device in dr.async_entries_for_config_entry(
+                dr.async_get(hass), synced_zone.entry_id
+            )
+            if identifier in device.identifiers
+        )
+        assert info["via_device_id"] == host.id
+        assert "via_device" not in info
+    else:
+        assert info["via_device"] == identifier
 
 
 @pytest.mark.parametrize(

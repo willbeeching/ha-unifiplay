@@ -307,6 +307,28 @@ async def test_a_failure_connack_is_not_a_connection(
     assert not client.is_connected
 
 
+async def test_publish_reports_a_socket_that_went_during_write(
+    mqtt_network: FakeMqttNetwork, caplog
+) -> None:
+    """paho returns MQTT_ERR_NO_CONN without raising when the socket goes
+    between ``is_connected`` and ``publish``. Treating that as success is
+    what made a mid-write disconnect look like a completed zone document.
+    """
+    import paho.mqtt.client as mqtt
+
+    device = mqtt_network.add(FakeDevice(ip=AMP_IP, mac=AMP_MAC))
+    client = UnifiPlayMqttClient(AMP_IP, AMP_MAC)
+    await client.connect()
+    try:
+        assert client.is_connected
+        device.publish_rc = mqtt.MQTT_ERR_NO_CONN
+        assert client.publish_action("set_groups", {"groups": []}) is False
+        assert device.published_actions("set_groups") == []
+        assert "rc=" in caplog.text
+    finally:
+        await client.disconnect()
+
+
 async def test_publish_while_disconnected_is_dropped(
     mqtt_network: FakeMqttNetwork, caplog
 ) -> None:

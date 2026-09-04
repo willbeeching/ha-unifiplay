@@ -959,6 +959,70 @@ async def test_unloading_cancels_the_post_write_re_reads(
     assert coordinator._host_reread_cancels == []
 
 
+async def test_a_second_write_keeps_the_first_until_readback(
+    hass: HomeAssistant, synced_zone: MockConfigEntry, amp: FakeDevice
+) -> None:
+    """coordinator.groups is not updated until a speaker reports the write.
+
+    A rename immediately followed by an index change used to rebuild the
+    second document from the pre-rename list and silently undo the first.
+    """
+    writer = _writer(hass, synced_zone)
+    amp.clear()
+    writer.rename(ZONE_ID, "Ground Floor")
+    amp.clear()
+    writer.set_index(ZONE_ID, 7)
+
+    written = _written_groups(amp)[0]
+    assert written["name"] == "Ground Floor"
+    assert written["group_index"] == 7
+
+
+async def test_a_stale_readback_does_not_undo_a_pending_write(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """A groups event that still carries the old name is the normal window
+    after a write, not a reason to drop the snapshot."""
+    writer = _writer(hass, synced_zone)
+    writer.rename(ZONE_ID, "Ground Floor")
+    amp.emit("groups", groups_body())
+    port.emit("groups", groups_body())
+    await settle(hass)
+    amp.clear()
+
+    writer.set_index(ZONE_ID, 7)
+    assert _written_groups(amp)[0]["name"] == "Ground Floor"
+
+
+async def test_a_confirmed_write_then_an_app_edit_is_the_next_source(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """Once the speakers agree on something else, the Play app wrote last."""
+    writer = _writer(hass, synced_zone)
+    writer.rename(ZONE_ID, "Ground Floor")
+    confirmed = groups_body(name="Ground Floor")
+    amp.emit("groups", confirmed)
+    port.emit("groups", confirmed)
+    await settle(hass)
+
+    from_app = groups_body(name="From the app")
+    amp.emit("groups", from_app)
+    port.emit("groups", from_app)
+    await settle(hass)
+    amp.clear()
+
+    writer.set_index(ZONE_ID, 3)
+    assert _written_groups(amp)[0]["name"] == "From the app"
+
+
 async def test_a_second_write_supersedes_the_first_re_read_series(
     hass: HomeAssistant, synced_zone: MockConfigEntry
 ) -> None:

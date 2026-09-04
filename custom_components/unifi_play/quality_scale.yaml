@@ -139,13 +139,14 @@ rules:
   test-coverage:
     status: done
     comment: |
-      Above 95% for every module and 100% for the config flow, enforced by
-      scripts/check_coverage.py on the minimum lane.
+      Above 95% for every production module — including __init__.py, which
+      is setup/unload/reload, not a package marker — and 100% for the
+      config flow. Enforced by scripts/check_coverage.py with no exemptions.
 
   # ── Gold ───────────────────────────────────────────────────────────────
   devices:
     status: done
-    comment: A device per speaker, plus one per zone with the host as via_device.
+    comment: A device per speaker, plus one per zone with the host as via_device_id.
   diagnostics:
     status: done
     comment: |

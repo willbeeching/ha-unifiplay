@@ -14,7 +14,7 @@ The shape of a write is fixed:
 4. **preflight** — every speaker that must receive the write is connected;
 5. publish the complete intended document to each of them;
 6. confirm every publish was submitted;
-7. only then let local state move.
+7. only then adopt the submitted document as the pending write snapshot.
 
 Steps 4 to 6 are the point. Publishing to whoever happens to be online and
 reporting success is a partial write reported as a whole one: the zone forms
@@ -160,7 +160,7 @@ class ZoneWriter:
             raise _translated("zone_needs_two_devices")
 
         member_macs = {normalise_mac(state.mac) for state in members}
-        for other_gid, other in self._coordinator.groups.items():
+        for other_gid, other in self._coordinator.groups_for_write().items():
             if other_gid == group_id:
                 continue
             for entry in other.dev_info:
@@ -197,7 +197,7 @@ class ZoneWriter:
         """
         required = {normalise_mac(mac) for mac in member_macs}
 
-        existing = self._coordinator.groups.get(group_id)
+        existing = self._coordinator.groups_for_write().get(group_id)
         if existing is not None:
             required.update(
                 normalise_mac(entry.get("mac", ""))
@@ -284,7 +284,7 @@ class ZoneWriter:
 
     def delete(self, group_id: str) -> ZoneWriteResult:
         """Remove a zone from every speaker that holds a copy."""
-        if group_id not in self._coordinator.groups:
+        if group_id not in self._coordinator.groups_for_write():
             raise _translated("zone_not_found")
         required = self.required_macs(group_id, ())
         clients = self._preflight(required)
@@ -300,11 +300,11 @@ class ZoneWriter:
     ) -> ZoneWriteResult:
         """Send the complete zone list to each preflighted speaker.
 
-        The list is rebuilt from coordinator state for every write, so zones
-        this call is not touching survive without each caller remembering to
-        resend them — and a zone changing hands needs no separate "strip it
-        from the old host" write, because the old host is given the same list
-        as everyone else.
+        The list is rebuilt from the write snapshot for every write, so
+        zones this call is not touching survive — including a change that
+        has been submitted but not yet reported back — and a zone changing
+        hands needs no separate "strip it from the old host" write, because
+        the old host is given the same list as everyone else.
         """
         groups = self._coordinator.zone_documents(group_id, document)
 
@@ -338,6 +338,11 @@ class ZoneWriter:
             len(written),
             written,
         )
+        # Submitted, not acknowledged. Hold this document as the source of
+        # the next write until a groups event confirms it; otherwise a
+        # rename immediately followed by an index change rebuilds the
+        # second list from the pre-rename report and undoes the first.
+        self._coordinator.adopt_written_groups(groups)
         self._coordinator.schedule_host_election_reread()
         return ZoneWriteResult(
             group_id=group_id, written_macs=tuple(written), deleted=deleted
@@ -346,7 +351,7 @@ class ZoneWriter:
     # ── Convenience wrappers, all of them one call to apply() ─────────────
 
     def _existing(self, group_id: str) -> UnifiPlayGroupState:
-        gs = self._coordinator.groups.get(group_id)
+        gs = self._coordinator.groups_for_write().get(group_id)
         if gs is None:
             raise _translated("zone_not_found")
         return gs

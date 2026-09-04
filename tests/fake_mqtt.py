@@ -126,6 +126,10 @@ class FakeDevice:
     #: between "every required speaker is connected" and the publish that
     #: follows. Nothing else can produce a partial write.
     drop_after_checks: int | None = None
+    #: When set, ``publish()`` returns this MQTT return code without
+    #: sending. Stages the race ``is_connected`` cannot close: the
+    #: socket going between the connected check and paho's write.
+    publish_rc: int | None = None
     #: Answer an ``info`` request with ``{"deviceName": name}``.
     #:
     #: Real devices always do. It is off by default because most tests drive
@@ -328,6 +332,8 @@ class _FakeClient:
         return (0, 1)
 
     def publish(self, topic: str, payload: bytes, qos: int = 0, retain: bool = False):
+        if self._device is not None and self._device.publish_rc is not None:
+            return _FakePublishInfo(self._device.publish_rc)
         if not self._connected:
             raise AssertionError(
                 "published while disconnected; publish_action is meant to "
@@ -436,7 +442,8 @@ class _FakeClient:
 class _FakePublishInfo:
     """The bare minimum of paho's ``MQTTMessageInfo``."""
 
-    rc = 0
+    def __init__(self, rc: int = 0) -> None:
+        self.rc = rc
 
     def wait_for_publish(self, timeout: float | None = None) -> None:
         return None

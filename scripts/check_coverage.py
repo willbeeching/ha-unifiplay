@@ -7,7 +7,9 @@ here, and the one that drives every zone mutation — barely touched. So this
 checks three things independently:
 
 * the integration as a whole clears ``OVERALL_MINIMUM``;
-* **every** production module clears ``MODULE_MINIMUM``;
+* **every** production module clears ``MODULE_MINIMUM``, with no exemptions —
+  ``__init__.py`` is setup, unload, reload and device removal, not a
+  package marker;
 * the config-flow modules are at 100%, because a config flow is pure branching
   on user input and a missed branch is a step a user can reach and nothing has
   ever executed.
@@ -43,15 +45,6 @@ MODULE_MINIMUM = 95.0
 #: Modules held to 100%. A config flow has no runtime state to hide behind:
 #: every branch is a step a user can reach.
 FULL_COVERAGE_MODULES = frozenset({"config_flow.py"})
-
-#: Files that carry no logic to cover. Anything else claiming an exemption
-#: needs a reason written here, not a quiet omission.
-EXEMPT_MODULES = frozenset(
-    {
-        # Re-exports and the package marker only.
-        "__init__.py",
-    }
-)
 
 PACKAGE = "custom_components/unifi_play"
 
@@ -92,8 +85,6 @@ def main(argv: list[str]) -> int:
     rows: list[tuple[str, float, float, list[int]]] = []
     for path, data in sorted(files.items()):
         module = _module_name(path)
-        if module in EXEMPT_MODULES:
-            continue
         percent = float(data["summary"]["percent_covered"])
         rows.append(
             (

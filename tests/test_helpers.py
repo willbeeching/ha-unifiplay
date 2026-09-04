@@ -22,6 +22,7 @@ from custom_components.unifi_play.helpers import (
     mac_normalise,
     resolve_device,
     strip_firmware_keys,
+    via_device_link,
 )
 
 from .const import AMP_MAC
@@ -138,3 +139,33 @@ def test_an_unrecognised_key_is_dropped_and_recorded(
         )
     assert "signal" not in stripped[0]
     assert "signal" in caplog.text
+
+
+def test_via_device_link_uses_whichever_form_this_ha_understands(
+    hass: HomeAssistant, setup_direct: MockConfigEntry
+) -> None:
+    """2026.9 has via_device_id; the 2025.8 floor still uses via_device."""
+    identifier = (DOMAIN, AMP_MAC)
+    link = via_device_link(hass, setup_direct.entry_id, identifier)
+    if "via_device_id" in link:
+        host = next(
+            device
+            for device in dr.async_entries_for_config_entry(
+                dr.async_get(hass), setup_direct.entry_id
+            )
+            if identifier in device.identifiers
+        )
+        assert link == {"via_device_id": host.id}
+    else:
+        assert link == {"via_device": identifier}
+
+
+def test_via_device_link_is_empty_when_the_host_is_not_registered(
+    hass: HomeAssistant, setup_direct: MockConfigEntry
+) -> None:
+    """The zone still exists; it just has no parent until the host is."""
+    import homeassistant.helpers.device_registry as device_registry
+
+    if not hasattr(device_registry, "async_get_device_id_by_identifier"):
+        pytest.skip("via_device_id lookup is not on this Home Assistant")
+    assert via_device_link(hass, setup_direct.entry_id, (DOMAIN, "DEADBEEF0000")) == {}

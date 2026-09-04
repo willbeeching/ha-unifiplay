@@ -41,7 +41,7 @@ from .coordinator import (
     UnifiPlayGroupState,
 )
 from .entity import UnifiPlayEntity, async_setup_platform_entities
-from .helpers import mac_normalise
+from .helpers import mac_normalise, via_device_link
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -504,8 +504,16 @@ class UnifiPlayZonePlayer(CoordinatorEntity[UnifiPlayCoordinator], MediaPlayerEn
             manufacturer="Ubiquiti",
             model="UniFi Play Zone",
         )
-        if gs.host_mac:
-            info["via_device"] = (DOMAIN, mac_normalise(gs.host_mac))
+        entry = self.coordinator.config_entry
+        if gs.host_mac and entry is not None:
+            # via_device_id on 2026.9; via_device on the 2025.8 floor.
+            # The helper picks; neither key is in both TypedDicts.
+            for key, value in via_device_link(
+                self.hass,
+                entry.entry_id,
+                (DOMAIN, mac_normalise(gs.host_mac)),
+            ).items():
+                info[key] = value  # type: ignore[literal-required]
         return info
 
     @property

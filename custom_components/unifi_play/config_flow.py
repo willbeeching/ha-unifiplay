@@ -104,7 +104,10 @@ def _parse_manual_hosts(raw: str) -> list[str]:
 
 
 def _entry_already_covering(
-    hass: HomeAssistant, devices: list[dict[str, Any]]
+    hass: HomeAssistant,
+    devices: list[dict[str, Any]],
+    *,
+    exclude_entry_id: str | None = None,
 ) -> str | None:
     """Return the title of an existing entry already managing these devices.
 
@@ -135,6 +138,8 @@ def _entry_already_covering(
     if not macs:
         return None
     for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+        if exclude_entry_id is not None and entry.entry_id == exclude_entry_id:
+            continue
         coordinator = entry.runtime_data
         covered = {
             mac_normalise(state.mac) for state in coordinator.data.values() if state.mac
@@ -294,7 +299,7 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
             host = user_input[CONF_CONTROLLER_HOST]
             api_key = user_input.get(CONF_API_KEY) or entry.data[CONF_API_KEY]
             verify_ssl = user_input[CONF_VERIFY_SSL]
-            normalized_host, _devices, errors = await self._async_validate_console(
+            normalized_host, devices, errors = await self._async_validate_console(
                 host, api_key, verify_ssl
             )
             if not errors:
@@ -308,6 +313,17 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
                     for other in self._async_current_entries()
                 ):
                     return self.async_abort(reason="already_configured_console")
+                # Unique IDs do not catch a console pointed at speakers a
+                # direct entry already owns. The same MAC collision initial
+                # setup refuses, and excluding this entry is what lets a
+                # reconfigure keep the hardware it already has.
+                if existing := _entry_already_covering(
+                    self.hass, devices, exclude_entry_id=entry.entry_id
+                ):
+                    return self.async_abort(
+                        reason="already_configured_device",
+                        description_placeholders={"entry": existing},
+                    )
                 return self.async_update_reload_and_abort(
                     entry,
                     unique_id=normalized_host,
@@ -365,6 +381,13 @@ class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):
                         "no_response" if manual_hosts else "no_devices_found"
                     )
                 else:
+                    if existing := _entry_already_covering(
+                        self.hass, found, exclude_entry_id=entry.entry_id
+                    ):
+                        return self.async_abort(
+                            reason="already_configured_device",
+                            description_placeholders={"entry": existing},
+                        )
                     return self.async_update_reload_and_abort(
                         entry, data_updates={CONF_MANUAL_HOSTS: manual_hosts}
                     )

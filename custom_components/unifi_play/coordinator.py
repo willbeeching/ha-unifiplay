@@ -134,6 +134,12 @@ class UnifiPlayGroupState:
 # (or an unreachable broker) on an earlier pass.
 DISCOVERY_INTERVAL = timedelta(minutes=5)
 
+#: Consecutive successful discovery passes that must omit a device before
+#: it is treated as gone enough to delete. One miss is a quiet sweep —
+#: Audio Port never answers UDP — so a single absence must not unlock
+#: removal. Two is a speaker the authoritative source has stopped listing.
+STALE_AFTER_ABSENCES = 2
+
 #: How long to wait after a CONNACK before the first burst of requests.
 #:
 #: A speaker that has only just accepted the connection drops requests that
@@ -497,11 +503,21 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # out, rather than on every event for as long as it lasts.
         self._conflicted_zones: set[str] = set()
         self.groups: dict[str, UnifiPlayGroupState] = {}
+        # The last zone list we successfully submitted. coordinator.groups
+        # is not updated until a speaker reports it back, so a rename
+        # followed by an index change would otherwise rebuild the second
+        # document from the pre-rename list and undo the first write.
+        # Mutations serialise against this snapshot until readback confirms
+        # it or the speakers converge on something else.
+        self._pending_groups: dict[str, UnifiPlayGroupState] | None = None
         self._zone_writer = ZoneWriter(self)
         # Cancel handles for the post-write zone re-reads, so shutdown can
         # take them down rather than leaving them to fire into a coordinator
         # that no longer has any clients.
         self._host_reread_cancels: list[CALLBACK_TYPE] = []
+        # Consecutive authoritative absences, keyed by device_id. Reset
+        # whenever a successful poll lists the speaker again.
+        self._discovery_misses: dict[str, int] = {}
 
     async def _async_update_data(self) -> dict[str, UnifiPlayDeviceState]:
         """Fetch the device list and return current state dict.
@@ -509,7 +525,8 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         Console mode asks the console's Apollo REST API; direct mode probes
         the network itself (UDP broadcast plus unicast to any manual hosts).
         Devices seen once are kept even if a later scan misses them — MQTT
-        remains the source of truth for online state.
+        remains the source of truth for online state — but consecutive
+        authoritative absences eventually make a deliberate delete possible.
         """
         if self.api is not None:
             try:
@@ -528,8 +545,11 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 raise UpdateFailed(f"Error fetching devices: {err}") from err
         else:
             # Manual hosts already tracked as devices are excluded from the
-            # MQTT fallback probe — no point opening a second TLS connection
-            # to a speaker we hold a live connection to.
+            # MQTT identification probe — that probe is for learning a MAC
+            # we do not have. A retained speaker whose client has stood
+            # down is recovered below by calling _ensure_mqtt directly;
+            # probing it again would block the poll on an info timeout
+            # for a device we already know.
             known_ips = {s.ip for s in self._device_states.values() if s.ip}
             try:
                 devices = await async_resolve_direct(
@@ -570,7 +590,78 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             mac = dev.get("mac", "")
             if ip and mac:
                 await self._ensure_mqtt(dev_id, ip, mac)
+
+        # A retained speaker the sweep did not re-list still needs its
+        # client rebuilt once retries are exhausted. Audio Port never
+        # appears in a UDP result, so this is the path that reaches
+        # _ensure_mqtt after a stand-down even if known_ips skipped it.
+        for state in list(self._device_states.values()):
+            if state.ip and state.mac:
+                await self._ensure_mqtt(state.device_id, state.ip, state.mac)
+
+        self._record_discovery_absences(devices)
         return self._device_states
+
+    def _mqtt_is_held(self, device_id: str) -> bool:
+        """True while a client is connected or still working on coming back."""
+        client = self._mqtt_clients.get(device_id)
+        return client is not None and (client.is_connected or client.is_retrying)
+
+    def _record_discovery_absences(self, devices: list[dict[str, Any]]) -> None:
+        """Count consecutive successful polls that omitted each speaker.
+
+        A console outage never reaches here — UpdateFailed is raised first —
+        so a miss is an authoritative list that no longer contains the
+        device, not a failed scan. Direct mode also treats a live MQTT
+        session as present: Audio Port never answers UDP, and skipping it
+        from the MQTT fallback is the healthy case, not an absence.
+        """
+        seen = {dev["id"] for dev in devices}
+        if self.api is None:
+            for device_id in self._mqtt_clients:
+                if self._mqtt_is_held(device_id):
+                    seen.add(device_id)
+        for device_id in self._device_states:
+            if device_id in seen:
+                self._discovery_misses[device_id] = 0
+            else:
+                self._discovery_misses[device_id] = (
+                    self._discovery_misses.get(device_id, 0) + 1
+                )
+
+    def device_is_current(self, device_id: str) -> bool:
+        """True until the authoritative source has omitted this device twice.
+
+        One missed scan is a quiet sweep, not a removal. Two consecutive
+        successful polls that leave it out is enough for a deliberate
+        delete to be accepted; the speaker is still retained until then.
+        """
+        return self._discovery_misses.get(device_id, 0) < STALE_AFTER_ABSENCES
+
+    async def async_forget_device(self, device_id: str) -> None:
+        """Drop a retained speaker the user has just been allowed to delete.
+
+        Leaving it in ``_device_states`` would recreate the registry device
+        from ``device_info`` on the next state write, which is the bounce
+        ``async_remove_config_entry_device`` exists to prevent.
+        """
+        self._device_states.pop(device_id, None)
+        self._discovery_misses.pop(device_id, None)
+        self._device_groups.pop(device_id, None)
+        self._device_groups_initialized.discard(device_id)
+        self._mqtt_offline_reason.pop(device_id, None)
+        self._address_changed.discard(device_id)
+        client = self._mqtt_clients.pop(device_id, None)
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Cleanup of forgotten MQTT client for %s failed", device_id
+                )
+        # Do not notify listeners: entities for this device are still
+        # registered and would KeyError on a missing state. Home Assistant
+        # removes them as part of the delete this was called from.
 
     async def _ensure_mqtt(self, device_id: str, ip: str, mac: str) -> None:
         """Connect the device's MQTT client, replacing one that has dropped.
@@ -801,6 +892,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         self._device_groups_initialized.add(device_id)
         self.groups = self._rebuild_canonical_zones()
         self._log_zone_conflicts()
+        self.reconcile_pending_groups()
 
         if is_initial:
             return
@@ -1007,22 +1099,75 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         """
         return self._device_groups
 
+    def groups_for_write(self) -> dict[str, UnifiPlayGroupState]:
+        """The zone list a subsequent write must build from.
+
+        Submission is not acknowledgement. ``groups`` stays at the last
+        device report until that report arrives, so sequential mutations
+        have to serialise against what we last submitted, not against a
+        snapshot that is still waiting for readback.
+        """
+        if self._pending_groups is not None:
+            return self._pending_groups
+        return self.groups
+
+    def adopt_written_groups(self, documents: list[dict[str, Any]]) -> None:
+        """Record a successfully submitted replace-all document as pending.
+
+        Host is firmware-owned and stripped from the write, so a zone whose
+        members did not change keeps the host we already knew; otherwise the
+        next membership edit would look hostless until the reread lands.
+        """
+        previous = self.groups_for_write()
+        pending = {
+            doc["group_id"]: UnifiPlayGroupState.from_mqtt(doc)
+            for doc in documents
+            if "group_id" in doc
+        }
+        for gid, gs in pending.items():
+            old = previous.get(gid)
+            if (
+                old is not None
+                and not gs.host_mac
+                and _member_macs(old) == _member_macs(gs)
+            ):
+                gs.host_mac = old.host_mac
+        self._pending_groups = pending
+
+    def reconcile_pending_groups(self) -> None:
+        """Drop the pending snapshot once readback confirms the write.
+
+        Matching signatures (host excluded) means the speakers have applied
+        it. A stale copy — the normal window after a write — must not drop
+        the snapshot: that is the report that would undo a rename if the
+        next mutation rebuilt from it. An app edit that arrives after
+        confirmation is already the new ``groups``; one that arrives before
+        is last-writer-wins, same as any other overlapping edit.
+        """
+        if self._pending_groups is None:
+            return
+        pending_sigs = {
+            gid: _zone_signature(gs) for gid, gs in self._pending_groups.items()
+        }
+        current_sigs = {gid: _zone_signature(gs) for gid, gs in self.groups.items()}
+        if pending_sigs == current_sigs:
+            self._pending_groups = None
+
     def zone_documents(
         self, group_id: str, updated: dict[str, Any] | None
     ) -> list[dict[str, Any]]:
         """The complete zone list to write, with one zone replaced or removed.
 
         ``set_groups`` is replace-all per device, so every write carries the
-        whole list. Rebuilding it from coordinator state here means zones the
-        caller is not touching survive without each caller remembering to
-        resend them - which is how a rename once dropped every other zone on
-        the speaker it was written to.
+        whole list. Rebuilding it from the write snapshot means zones the
+        caller is not touching survive — including a rename that has been
+        submitted but not yet reported back.
         """
         from .helpers import gs_to_dict
 
         groups: list[dict[str, Any]] = []
         replaced = False
-        for gid, gs in self.groups.items():
+        for gid, gs in self.groups_for_write().items():
             if gid != group_id:
                 groups.append(gs_to_dict(gs))
                 continue
@@ -1171,5 +1316,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             await client.disconnect()
         self._mqtt_clients.clear()
         self._mqtt_offline_reason.clear()
+        self._pending_groups = None
+        self._discovery_misses.clear()
         # Nothing to close: the API client borrows Home Assistant's shared
         # session, which Home Assistant closes on shutdown.

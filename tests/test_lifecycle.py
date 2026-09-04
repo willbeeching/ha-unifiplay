@@ -28,7 +28,10 @@ from custom_components.unifi_play.const import (
     CONF_MANUAL_HOSTS,
     DOMAIN,
 )
-from custom_components.unifi_play.coordinator import DISCOVERY_INTERVAL
+from custom_components.unifi_play.coordinator import (
+    DISCOVERY_INTERVAL,
+    STALE_AFTER_ABSENCES,
+)
 
 from .conftest import ApolloServer, entry_coordinator
 from .const import (
@@ -37,12 +40,14 @@ from .const import (
     API_KEY,
     CONSOLE_HOST,
     PORT_ID,
+    PORT_MAC,
     THIRD_IP,
     THIRD_MAC,
     ZONE_ID,
     device_dict,
     empty_groups_body,
     groups_body,
+    port_device,
     third_device,
 )
 from .fake_mqtt import FakeDevice, FakeMqttNetwork
@@ -360,6 +365,124 @@ async def test_nothing_removes_a_speaker_on_its_own(
     assert hass.states.get("media_player.living_room") is not None
 
 
+async def test_a_speaker_the_console_stops_listing_becomes_deletable(
+    hass: HomeAssistant,
+    setup_console: MockConfigEntry,
+    apollo: ApolloServer,
+    aioclient_mock,
+    settle,
+) -> None:
+    """A device removed from the console used to stay undeletable forever.
+
+    One missed API response is not enough — that is a quiet poll — but
+    consecutive authoritative absences open the door for a deliberate
+    delete without a reload.
+    """
+    from custom_components.unifi_play import async_remove_config_entry_device
+
+    device = _device_with(hass, setup_console, AMP_MAC)
+    assert device is not None
+
+    aioclient_mock.clear_requests()
+    apollo.devices({"err": None, "data": [port_device()]})
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+
+    assert not await async_remove_config_entry_device(hass, setup_console, device)
+    assert AMP_ID in entry_coordinator(hass, setup_console).data
+
+    for _ in range(STALE_AFTER_ABSENCES - 1):
+        async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+        await settle(hass)
+
+    assert await async_remove_config_entry_device(hass, setup_console, device)
+    assert AMP_ID not in entry_coordinator(hass, setup_console).data
+
+
+async def test_a_console_outage_does_not_age_a_speaker_out(
+    hass: HomeAssistant,
+    setup_console: MockConfigEntry,
+    apollo: ApolloServer,
+    aioclient_mock,
+    settle,
+) -> None:
+    """UpdateFailed is not an authoritative absence."""
+    from custom_components.unifi_play import async_remove_config_entry_device
+
+    device = _device_with(hass, setup_console, AMP_MAC)
+    assert device is not None
+
+    aioclient_mock.clear_requests()
+    apollo.connection_error()
+    for _ in range(STALE_AFTER_ABSENCES + 1):
+        async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+        await settle(hass)
+
+    assert not await async_remove_config_entry_device(hass, setup_console, device)
+    assert AMP_ID in entry_coordinator(hass, setup_console).data
+
+
+async def test_a_connected_direct_speaker_does_not_go_stale_on_udp_silence(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    discovered_devices,
+    settle,
+) -> None:
+    """Audio Port never answers UDP; a live MQTT session is still present."""
+    from custom_components.unifi_play import async_remove_config_entry_device
+
+    device = _device_with(hass, setup_direct, PORT_MAC)
+    assert device is not None
+
+    discovered_devices.clear()
+    for _ in range(STALE_AFTER_ABSENCES + 1):
+        async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+        await settle(hass)
+
+    assert not await async_remove_config_entry_device(hass, setup_direct, device)
+
+
+async def test_a_zone_that_is_gone_can_be_deleted(
+    hass: HomeAssistant, synced_zone: MockConfigEntry
+) -> None:
+    from custom_components.unifi_play import async_remove_config_entry_device
+
+    device = _device_with(hass, synced_zone, f"zone_{ZONE_ID}")
+    assert device is not None
+    entry_coordinator(hass, synced_zone).groups.clear()
+    assert await async_remove_config_entry_device(hass, synced_zone, device)
+
+
+async def test_foreign_identifiers_do_not_block_or_allow_a_delete(
+    hass: HomeAssistant, setup_direct: MockConfigEntry
+) -> None:
+    """A registry row can carry identifiers this integration does not own."""
+    from types import SimpleNamespace
+
+    from custom_components.unifi_play import async_remove_config_entry_device
+
+    still_ours = SimpleNamespace(identifiers={("other", "x"), (DOMAIN, AMP_MAC)})
+    assert not await async_remove_config_entry_device(hass, setup_direct, still_ours)
+
+    unrelated = SimpleNamespace(identifiers={("other", "x"), (DOMAIN, 123)})
+    assert await async_remove_config_entry_device(hass, setup_direct, unrelated)
+
+
+async def test_a_failed_platform_unload_leaves_the_coordinator_running(
+    hass: HomeAssistant, setup_direct: MockConfigEntry, mqtt_network: FakeMqttNetwork
+) -> None:
+    """Shutdown is the coordinator's job only after platforms have gone."""
+    from custom_components.unifi_play import async_unload_entry
+
+    with patch(
+        "homeassistant.config_entries.ConfigEntries.async_unload_platforms",
+        return_value=False,
+    ):
+        assert not await async_unload_entry(hass, setup_direct)
+
+    assert mqtt_network.live_clients()
+
+
 # ── Reconfigure ───────────────────────────────────────────────────────────
 
 
@@ -495,6 +618,45 @@ async def test_a_discovery_socket_failure_during_reconfigure(
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "discovery_failed"}
     assert direct_entry.data[CONF_MANUAL_HOSTS] == []
+
+
+async def test_reconfigure_refuses_speakers_another_entry_already_has(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    console_entry: MockConfigEntry,
+    apollo: ApolloServer,
+) -> None:
+    """Reconfigure used to discard the validated device list.
+
+    Pointing a console entry at speakers a direct entry already owns mints
+    the same MAC-based unique IDs initial setup correctly refuses.
+    """
+    console_entry.add_to_hass(hass)
+    result = await console_entry.start_reconfigure_flow(hass)
+    apollo.devices()
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_CONTROLLER_HOST: CONSOLE_HOST}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured_device"
+    assert result["description_placeholders"]["entry"] == "UniFi Play (Direct)"
+
+
+async def test_reconfigure_direct_refuses_speakers_a_console_already_has(
+    hass: HomeAssistant,
+    setup_console: MockConfigEntry,
+    direct_entry: MockConfigEntry,
+    udp_discovery,
+    amp: FakeDevice,
+    port: FakeDevice,
+) -> None:
+    direct_entry.add_to_hass(hass)
+    result = await direct_entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_MANUAL_HOSTS: ""}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured_device"
 
 
 async def test_reconfigure_refuses_a_console_another_entry_already_has(
