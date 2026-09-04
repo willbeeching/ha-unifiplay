@@ -97,7 +97,9 @@ rules:
       a console entry and a direct entry have different identities and can
       still reach the same speakers. The check also runs on every discovery
       poll, because a console created with an empty device list can later
-      find speakers a direct entry already owns.
+      find speakers a direct entry already owns. The repair is per config
+      entry so two overlapping coordinators do not share one issue.
+      tests/test_lifecycle.py::test_overlapping_entries_keep_separate_repairs.
 
   # ── Silver ─────────────────────────────────────────────────────────────
   action-exceptions:

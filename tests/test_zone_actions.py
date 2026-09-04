@@ -1068,6 +1068,41 @@ async def test_a_partial_app_edit_keeps_the_pending_write(
     assert _written_groups(amp)[0]["name"] == "Ground Floor"
 
 
+async def test_a_delayed_echo_of_an_earlier_write_is_not_an_app_edit(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """A second mutation must not treat the first write's readback as the app.
+
+    Rename then set_index used to reset the pending baseline to the
+    pre-write document. Both speakers then reporting the renamed zone at
+    the original index matched neither the new pending state nor that
+    reset baseline, so reconcile discarded the index change and the next
+    mutation published index 1.
+    """
+    writer = _writer(hass, synced_zone)
+    writer.rename(ZONE_ID, "Ground Floor")
+    writer.set_index(ZONE_ID, 7)
+
+    first_write = groups_body(name="Ground Floor")
+    amp.emit("groups", first_write)
+    port.emit("groups", first_write)
+    await settle(hass)
+
+    pending = entry_coordinator(hass, synced_zone).groups_for_write()
+    assert pending[ZONE_ID].name == "Ground Floor"
+    assert pending[ZONE_ID].group_index == 7
+
+    amp.clear()
+    writer.rename(ZONE_ID, "Upstairs")
+    written = _written_groups(amp)[0]
+    assert written["name"] == "Upstairs"
+    assert written["group_index"] == 7
+
+
 async def test_a_second_write_supersedes_the_first_re_read_series(
     hass: HomeAssistant, synced_zone: MockConfigEntry
 ) -> None:

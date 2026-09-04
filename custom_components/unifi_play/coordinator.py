@@ -510,12 +510,15 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # Mutations serialise against this snapshot until readback confirms
         # it or the speakers converge on something else.
         self._pending_groups: dict[str, UnifiPlayGroupState] | None = None
-        # Signatures of coordinator.groups at the moment of the write, so a
-        # later Play-app edit can be told from a stale echo of the same
-        # pre-write document. Without this, speakers that all agree on the
-        # app's name still leave the older HA name in the snapshot, and the
-        # next mutation replays it.
-        self._pending_baseline: dict[str, tuple[Any, ...]] | None = None
+        # Signatures of every HA-submitted document that has not yet been
+        # confirmed, plus the pre-write baseline. A second rapid mutation
+        # used to replace a single baseline with the current `self.groups`
+        # snapshot — still the original pre-write document, because we hold
+        # that until readback. Speakers then echoed the first mutation;
+        # that matched neither the new pending state nor the reset
+        # baseline, so reconcile treated it as an app edit and discarded
+        # the newer write.
+        self._outstanding_writes: list[dict[str, tuple[Any, ...]]] = []
         self._zone_writer = ZoneWriter(self)
         # Cancel handles for the post-write zone re-reads, so shutdown can
         # take them down rather than leaving them to fire into a coordinator
@@ -529,6 +532,11 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # an issue schedules a store write, and a reload that has not
         # finished yet would otherwise leave a lingering timer.
         self._overlap_issue_open = False
+        # One issue per config entry. A domain-wide id meant every
+        # overlapping coordinator shared a single repair; creating,
+        # updating, or deleting from one entry overwrote or cleared
+        # another entry's warning.
+        self._overlap_issue_key = f"speakers_already_covered_{config_entry.entry_id}"
 
     async def _async_update_data(self) -> dict[str, UnifiPlayDeviceState]:
         """Fetch the device list and return current state dict.
@@ -575,17 +583,17 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # whole time. Claiming them here would mint a colliding unique ID
         # for every platform.
         # helpers imports this module at load time, so the lookup is local.
-        from .helpers import entry_covering_macs
+        from .helpers import entries_covering_macs
 
         entry = self.config_entry
         exclude_entry_id = entry.entry_id if entry is not None else None
-        overlapped: dict[str, tuple[str, str]] = {}
+        overlapped: dict[str, tuple[str, tuple[str, ...]]] = {}
         for dev in devices:
             dev_id = dev["id"]
             mac = dev.get("mac", "")
             if dev_id not in self._device_states:
                 if mac and (
-                    existing := entry_covering_macs(
+                    existing := entries_covering_macs(
                         self.hass,
                         [mac],
                         exclude_entry_id=exclude_entry_id,
@@ -599,7 +607,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                         "unique IDs",
                         name,
                         mac,
-                        existing,
+                        ", ".join(existing),
                     )
                     continue
                 state = UnifiPlayDeviceState(dev)
@@ -849,10 +857,10 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         ir.async_delete_issue(self.hass, DOMAIN, self._cert_issue_id(mac))
 
     def _overlap_issue_id(self) -> str:
-        return "speakers_already_covered"
+        return self._overlap_issue_key
 
     def _async_update_overlap_issue(
-        self, overlapped: dict[str, tuple[str, str]]
+        self, overlapped: dict[str, tuple[str, tuple[str, ...]]]
     ) -> None:
         """Open or clear the repair that says another entry already owns these.
 
@@ -868,8 +876,12 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 ir.async_delete_issue(self.hass, DOMAIN, issue_id)
                 self._overlap_issue_open = False
             return
-        names = ", ".join(sorted({name for name, _title in overlapped.values()}))
-        other = next(iter(overlapped.values()))[1]
+        names = ", ".join(sorted({name for name, _titles in overlapped.values()}))
+        seen: list[str] = []
+        for _name, titles in overlapped.values():
+            for title in titles:
+                if title not in seen:
+                    seen.append(title)
         ir.async_create_issue(
             self.hass,
             DOMAIN,
@@ -877,7 +889,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             is_fixable=False,
             severity=ir.IssueSeverity.ERROR,
             translation_key="speakers_already_covered",
-            translation_placeholders={"names": names, "entry": other},
+            translation_placeholders={"names": names, "entry": ", ".join(seen)},
         )
         self._overlap_issue_open = True
 
@@ -1207,30 +1219,39 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 and _member_macs(old) == _member_macs(gs)
             ):
                 gs.host_mac = old.host_mac
-        # Device-reported view, not the write snapshot: a second mutation
-        # before readback must still be compared against what the speakers
-        # last served, not against the previous pending document.
-        self._pending_baseline = {
-            gid: _zone_signature(gs) for gid, gs in self.groups.items()
-        }
+        # Keep every earlier HA-submitted signature until the newest write
+        # is confirmed. Resetting a single baseline to `self.groups` on
+        # each adopt loses the first mutation: speakers then echo that
+        # write, it matches neither the new pending document nor the
+        # pre-write groups we just stored, and reconcile discards the
+        # newer change as if the app had overwritten us.
+        if self._pending_groups is None:
+            self._outstanding_writes = [
+                {gid: _zone_signature(gs) for gid, gs in self.groups.items()}
+            ]
+        else:
+            self._outstanding_writes.append(
+                {gid: _zone_signature(gs) for gid, gs in self._pending_groups.items()}
+            )
         self._pending_groups = pending
 
     def _clear_pending_groups(self) -> None:
         self._pending_groups = None
-        self._pending_baseline = None
+        self._outstanding_writes = []
 
     def reconcile_pending_groups(self) -> None:
-        """Drop the pending snapshot once readback confirms the write.
+        """Drop the pending snapshot once readback confirms the newest write.
 
         Matching signatures (host excluded) means the speakers have applied
-        it. A stale copy — the normal window after a write — must not drop
-        the snapshot: that is the report that would undo a rename if the
+        it. A stale copy — the normal window after a write, or a delayed
+        echo of an earlier HA mutation — must not drop the snapshot: that
+        is the report that would undo a rename or an index change if the
         next mutation rebuilt from it.
 
         Home Assistant and the Play app are equal peers. If every copy we
-        have agrees on a document that is neither what we submitted nor
-        what the speakers served when we wrote, another peer wrote last
-        and the snapshot would replay the older HA value on the next
+        have agrees on a document that is neither what we last submitted
+        nor any earlier HA write still outstanding, another peer wrote
+        last and the snapshot would replay the older HA value on the next
         mutation. Speakers that still disagree are mid-edit; keep the
         snapshot until they converge.
         """
@@ -1243,7 +1264,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         if pending_sigs == current_sigs:
             self._clear_pending_groups()
             return
-        if current_sigs == self._pending_baseline:
+        if current_sigs in self._outstanding_writes:
             return
         if self._conflicted_zones:
             return

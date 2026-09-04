@@ -20,6 +20,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.unifi_play.const import DOMAIN
 from custom_components.unifi_play.helpers import (
     APP_DEV_INFO_KEYS,
+    entries_covering_macs,
     entry_covering_macs,
     mac_normalise,
     resolve_device,
@@ -43,6 +44,12 @@ async def test_entry_covering_macs_names_the_loaded_entry(
     )
     assert entry_covering_macs(hass, []) is None
     assert entry_covering_macs(hass, [""]) is None
+    assert entries_covering_macs(hass, [AMP_MAC]) == ("UniFi Play (Direct)",)
+    assert entries_covering_macs(hass, ["DEADBEEF0000"]) == ()
+    assert (
+        entries_covering_macs(hass, [AMP_MAC], exclude_entry_id=setup_direct.entry_id)
+        == ()
+    )
 
 
 @pytest.mark.parametrize(

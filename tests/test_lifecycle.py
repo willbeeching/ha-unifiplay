@@ -26,7 +26,9 @@ from custom_components.unifi_play.const import (
     CONF_API_KEY,
     CONF_CONTROLLER_HOST,
     CONF_MANUAL_HOSTS,
+    CONF_MODE,
     DOMAIN,
+    MODE_CONSOLE,
 )
 from custom_components.unifi_play.coordinator import (
     DISCOVERY_INTERVAL,
@@ -66,6 +68,23 @@ def _device_with(hass: HomeAssistant, entry: MockConfigEntry, identifier: str):
         if (DOMAIN, identifier) in device.identifiers:
             return device
     return None
+
+
+def _overlap_issue_id(entry: MockConfigEntry) -> str:
+    return f"speakers_already_covered_{entry.entry_id}"
+
+
+def _second_console_entry(host: str = "192.168.1.2") -> MockConfigEntry:
+    return MockConfigEntry(
+        domain=DOMAIN,
+        title=f"UniFi Play ({host})",
+        unique_id=host,
+        data={
+            CONF_MODE: MODE_CONSOLE,
+            CONF_CONTROLLER_HOST: host,
+            CONF_API_KEY: API_KEY,
+        },
+    )
 
 
 # ── runtime_data ──────────────────────────────────────────────────────────
@@ -183,7 +202,7 @@ async def test_a_console_that_later_finds_already_managed_speakers_does_not_clai
     ]
     assert len(unique_ids) == len(set(unique_ids))
 
-    issue = ir.async_get(hass).async_get_issue(DOMAIN, "speakers_already_covered")
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, _overlap_issue_id(console_entry))
     assert issue is not None
     assert issue.translation_key == "speakers_already_covered"
     assert issue.translation_placeholders is not None
@@ -223,7 +242,8 @@ async def test_unloading_the_other_entry_lets_the_console_adopt_the_speakers(
 
     assert set(console_entry.runtime_data.data) == {AMP_ID, PORT_ID}
     assert (
-        ir.async_get(hass).async_get_issue(DOMAIN, "speakers_already_covered") is None
+        ir.async_get(hass).async_get_issue(DOMAIN, _overlap_issue_id(console_entry))
+        is None
     )
     assert hass.states.get("media_player.living_room") is not None
 
@@ -265,6 +285,119 @@ async def test_a_later_unique_speaker_is_still_adopted_beside_an_overlap(
     assert set(console_entry.runtime_data.data) == {THIRD_ID}
     assert hass.states.get("media_player.study") is not None
     assert hass.states.get("media_player.living_room") is not None
+
+
+async def test_overlapping_entries_keep_separate_repairs(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    console_entry: MockConfigEntry,
+    apollo: ApolloServer,
+    settle,
+) -> None:
+    """Each overlapping coordinator owns its own repair.
+
+    A fixed domain-wide issue id meant creating or deleting from one
+    entry overwrote or cleared another's warning.
+    """
+    from homeassistant.helpers import issue_registry as ir
+
+    empty = {"err": None, "data": []}
+    apollo.devices(empty)
+    second_host = "192.168.1.2"
+    second_apollo = ApolloServer(apollo._mocker, host=second_host)
+    second_apollo.devices(empty)
+    second_entry = _second_console_entry(second_host)
+
+    console_entry.add_to_hass(hass)
+    second_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(console_entry.entry_id)
+    assert await hass.config_entries.async_setup(second_entry.entry_id)
+    await settle(hass)
+
+    apollo._mocker.clear_requests()
+    apollo.devices()
+    second_apollo.devices()
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+
+    issues = ir.async_get(hass)
+    first_issue = issues.async_get_issue(DOMAIN, _overlap_issue_id(console_entry))
+    second_issue = issues.async_get_issue(DOMAIN, _overlap_issue_id(second_entry))
+    assert first_issue is not None
+    assert second_issue is not None
+    assert first_issue.issue_id != second_issue.issue_id
+    assert first_issue.translation_placeholders is not None
+    assert first_issue.translation_placeholders["entry"] == "UniFi Play (Direct)"
+    assert second_issue.translation_placeholders is not None
+    assert second_issue.translation_placeholders["entry"] == "UniFi Play (Direct)"
+
+    assert await hass.config_entries.async_unload(console_entry.entry_id)
+    await hass.async_block_till_done()
+    assert issues.async_get_issue(DOMAIN, _overlap_issue_id(console_entry)) is None
+    assert issues.async_get_issue(DOMAIN, _overlap_issue_id(second_entry)) is not None
+
+
+async def test_the_overlap_repair_names_every_owning_entry(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    console_entry: MockConfigEntry,
+    apollo: ApolloServer,
+    third: FakeDevice,
+    settle,
+) -> None:
+    """Two siblings covering different speakers must both appear."""
+    from homeassistant.helpers import issue_registry as ir
+
+    apollo.devices({"err": None, "data": []})
+    console_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(console_entry.entry_id)
+    await settle(hass)
+
+    apollo._mocker.clear_requests()
+    apollo.devices({"err": None, "data": [third_device()]})
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+    assert set(console_entry.runtime_data.data) == {THIRD_ID}
+
+    second_host = "192.168.1.2"
+    second_apollo = ApolloServer(apollo._mocker, host=second_host)
+    second_apollo.devices({"err": None, "data": []})
+    second_entry = _second_console_entry(second_host)
+    second_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(second_entry.entry_id)
+    await settle(hass)
+
+    apollo._mocker.clear_requests()
+    apollo.devices({"err": None, "data": [third_device()]})
+    second_apollo.devices(
+        {
+            "err": None,
+            "data": [
+                device_dict(),
+                device_dict(
+                    device_id=PORT_ID,
+                    mac=PORT_MAC,
+                    ip=PORT_IP,
+                    name="Kitchen",
+                    platform="UPL-PORT",
+                ),
+                third_device(),
+            ],
+        }
+    )
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, _overlap_issue_id(second_entry))
+    assert issue is not None
+    assert issue.translation_placeholders is not None
+    owners = issue.translation_placeholders["entry"]
+    assert "UniFi Play (Direct)" in owners
+    assert console_entry.title in owners
+    names = issue.translation_placeholders["names"]
+    assert "Living Room" in names
+    assert "Kitchen" in names
+    assert "Study" in names
 
 
 # ── Setup failure mapping ─────────────────────────────────────────────────

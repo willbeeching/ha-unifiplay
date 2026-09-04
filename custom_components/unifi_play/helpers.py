@@ -30,13 +30,13 @@ def loaded_coordinators(hass: HomeAssistant) -> list[UnifiPlayCoordinator]:
     ]
 
 
-def entry_covering_macs(
+def entries_covering_macs(
     hass: HomeAssistant,
     macs: Iterable[str],
     *,
     exclude_entry_id: str | None = None,
-) -> str | None:
-    """Return the title of a loaded entry already managing any of these MACs.
+) -> tuple[str, ...]:
+    """Titles of every loaded entry already managing any of these MACs.
 
     Unique IDs are MAC-based and not namespaced per entry, so a second
     coordinator that accepts a speaker another loaded entry already has
@@ -50,16 +50,21 @@ def entry_covering_macs(
     direct entry that was running the whole time.
 
     Only loaded entries are checked. An entry that failed to set up has no
-    coordinator and is not claiming anything.
+    coordinator and is not claiming anything. Every matching title is
+    returned, not just the first: the overlap repair is per config entry,
+    and the message has to name every sibling that is already covering the
+    speakers. A single shared issue id used to let one coordinator
+    overwrite or delete another's warning.
 
-    Returns the title rather than the entry so a coordinator whose entry
-    has somehow gone from the registry still blocks the claim; returning
-    None there would let the duplicate through on the one path where
+    Returns titles rather than entries so a coordinator whose entry has
+    somehow gone from the registry still blocks the claim; returning
+    nothing there would let the duplicate through on the one path where
     state is already inconsistent.
     """
     wanted = {mac_normalise(mac) for mac in macs if mac}
     if not wanted:
-        return None
+        return ()
+    titles: list[str] = []
     for entry in hass.config_entries.async_loaded_entries(DOMAIN):
         if exclude_entry_id is not None and entry.entry_id == exclude_entry_id:
             continue
@@ -68,8 +73,23 @@ def entry_covering_macs(
             mac_normalise(state.mac) for state in coordinator.data.values() if state.mac
         }
         if covered & wanted:
-            return entry.title
-    return None
+            titles.append(entry.title)
+    return tuple(titles)
+
+
+def entry_covering_macs(
+    hass: HomeAssistant,
+    macs: Iterable[str],
+    *,
+    exclude_entry_id: str | None = None,
+) -> str | None:
+    """The first loaded entry already managing any of these MACs.
+
+    The config-flow abort still takes a single title. Discovery and the
+    overlap repair use ``entries_covering_macs`` so every owner is named.
+    """
+    titles = entries_covering_macs(hass, macs, exclude_entry_id=exclude_entry_id)
+    return titles[0] if titles else None
 
 
 def mac_normalise(mac: str) -> str:
