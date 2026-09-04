@@ -222,7 +222,9 @@ async def test_unloading_the_other_entry_lets_the_console_adopt_the_speakers(
     await settle(hass)
 
     assert set(console_entry.runtime_data.data) == {AMP_ID, PORT_ID}
-    assert ir.async_get(hass).async_get_issue(DOMAIN, "speakers_already_covered") is None
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, "speakers_already_covered") is None
+    )
     assert hass.states.get("media_player.living_room") is not None
 
 

@@ -338,6 +338,9 @@ async def test_reconfigure_can_turn_verification_on(
         result["flow_id"],
         {CONF_CONTROLLER_HOST: CONSOLE_HOST, CONF_VERIFY_SSL: True},
     )
+    # The abort reloads the entry. Without waiting, teardown races the
+    # in-flight setup and fails on the store write it scheduled.
+    await hass.async_block_till_done()
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert console_entry.data[CONF_VERIFY_SSL] is True
