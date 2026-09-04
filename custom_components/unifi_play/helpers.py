@@ -1,8 +1,9 @@
-"""Shared device-resolution helpers used by both services and config flow."""
+"""Shared device-resolution helpers used by services, config flow and discovery."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -27,6 +28,48 @@ def loaded_coordinators(hass: HomeAssistant) -> list[UnifiPlayCoordinator]:
     return [
         entry.runtime_data for entry in hass.config_entries.async_loaded_entries(DOMAIN)
     ]
+
+
+def entry_covering_macs(
+    hass: HomeAssistant,
+    macs: Iterable[str],
+    *,
+    exclude_entry_id: str | None = None,
+) -> str | None:
+    """Return the title of a loaded entry already managing any of these MACs.
+
+    Unique IDs are MAC-based and not namespaced per entry, so a second
+    coordinator that accepts a speaker another loaded entry already has
+    mints a full set of colliding IDs. Home Assistant rejects the later
+    ones; the rejected entities keep their registry rows and read
+    unavailable forever.
+
+    Used at setup (once the hardware has been discovered) and again on
+    every discovery poll: a console created while Apollo listed nothing is
+    a valid entry, and the speakers it later finds may already belong to a
+    direct entry that was running the whole time.
+
+    Only loaded entries are checked. An entry that failed to set up has no
+    coordinator and is not claiming anything.
+
+    Returns the title rather than the entry so a coordinator whose entry
+    has somehow gone from the registry still blocks the claim; returning
+    None there would let the duplicate through on the one path where
+    state is already inconsistent.
+    """
+    wanted = {mac_normalise(mac) for mac in macs if mac}
+    if not wanted:
+        return None
+    for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+        if exclude_entry_id is not None and entry.entry_id == exclude_entry_id:
+            continue
+        coordinator = entry.runtime_data
+        covered = {
+            mac_normalise(state.mac) for state in coordinator.data.values() if state.mac
+        }
+        if covered & wanted:
+            return entry.title
+    return None
 
 
 def mac_normalise(mac: str) -> str:

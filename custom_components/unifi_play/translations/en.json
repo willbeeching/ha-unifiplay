@@ -517,6 +517,10 @@
     "mqtt_certificate_rejected": {
       "title": "{name} is offline",
       "description": "Home Assistant cannot talk to **{name}** ({ip}) over MQTT. The speaker rejected every client certificate this integration ships.\n\nFirmware 1.0.41 rotated the MQTT certificate authority, which previously left every entity unavailable with no device-level signal. This integration now tries each bundled generation on connect. If this repair is still open after a Home Assistant restart, the speaker is using a CA we do not have yet. Please open a GitHub issue with the speaker model and firmware version."
+    },
+    "speakers_already_covered": {
+      "title": "Speakers already set up by another entry",
+      "description": "{names} are already managed by \"{entry}\". A UniFi Play device can only belong to one entry: a second one covering the same hardware creates no entities at all, because every entity ID it would use is already taken.\n\nThis entry was created while the console reported no devices, which is valid, and later found speakers another entry already owns. They have been left with that entry. Remove the other entry if you want this one to manage them, or remove this entry if the other one is the one you meant."
     }
   },
   "exceptions": {

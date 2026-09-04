@@ -70,7 +70,9 @@ rules:
     comment: |
       unifi_play_<MAC>_<key> for speakers, unifi_play_zone_<group_id>_<key>
       for zones. MAC-based rather than per-entry, which is why
-      _entry_already_covering blocks a second entry over the same hardware.
+      _entry_already_covering blocks a second entry over the same hardware
+      at setup and the coordinator refuses a speaker another loaded entry
+      already has. tests/test_lifecycle.py::test_a_console_that_later_finds_already_managed_speakers_does_not_claim_them.
   has-entity-name:
     status: done
   runtime-data:
@@ -93,7 +95,9 @@ rules:
     comment: |
       Unique ID per mode, plus an overlap check on the discovered hardware:
       a console entry and a direct entry have different identities and can
-      still reach the same speakers.
+      still reach the same speakers. The check also runs on every discovery
+      poll, because a console created with an empty device list can later
+      find speakers a direct entry already owns.
 
   # ── Silver ─────────────────────────────────────────────────────────────
   action-exceptions:
@@ -229,9 +233,10 @@ rules:
   repair-issues:
     status: done
     comment: |
-      One issue, for a speaker that rejected every bundled certificate. It
-      is the only failure this integration can detect that the user has to
-      act on and cannot see anywhere else.
+      Two issues: a speaker that rejected every bundled certificate, and
+      speakers a later discovery pass found that another loaded entry
+      already owns. Both are failures the user has to act on and cannot
+      see anywhere else — the colliding unique IDs only appear in the log.
   stale-devices:
     status: done
     comment: |

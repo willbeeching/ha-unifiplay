@@ -19,6 +19,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.unifi_play.const import DOMAIN
 from custom_components.unifi_play.helpers import (
     APP_DEV_INFO_KEYS,
+    entry_covering_macs,
     mac_normalise,
     resolve_device,
     strip_firmware_keys,
@@ -26,6 +27,21 @@ from custom_components.unifi_play.helpers import (
 )
 
 from .const import AMP_MAC
+
+
+async def test_entry_covering_macs_names_the_loaded_entry(
+    hass: HomeAssistant, setup_direct: MockConfigEntry
+) -> None:
+    """The lookup is about overlapping hardware, not about a second entry."""
+    assert entry_covering_macs(hass, [AMP_MAC]) == "UniFi Play (Direct)"
+    assert entry_covering_macs(hass, ["aa:bb:cc:dd:ee:ff"]) == "UniFi Play (Direct)"
+    assert entry_covering_macs(hass, ["DEADBEEF0000"]) is None
+    assert (
+        entry_covering_macs(hass, [AMP_MAC], exclude_entry_id=setup_direct.entry_id)
+        is None
+    )
+    assert entry_covering_macs(hass, []) is None
+    assert entry_covering_macs(hass, [""]) is None
 
 
 @pytest.mark.parametrize(

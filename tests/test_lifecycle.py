@@ -40,7 +40,9 @@ from .const import (
     API_KEY,
     CONSOLE_HOST,
     PORT_ID,
+    PORT_IP,
     PORT_MAC,
+    THIRD_ID,
     THIRD_IP,
     THIRD_MAC,
     ZONE_ID,
@@ -139,6 +141,128 @@ async def test_unloading_one_entry_leaves_the_other_working(
     assert hass.states.get("media_player.living_room") is not None
     # Actions are registered for the run, not per entry.
     assert hass.services.has_service(DOMAIN, "create_zone")
+
+
+async def test_a_console_that_later_finds_already_managed_speakers_does_not_claim_them(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    console_entry: MockConfigEntry,
+    apollo: ApolloServer,
+    settle,
+) -> None:
+    """A console created with no hardware is valid; the overlap is later.
+
+    Unique IDs are MAC-based. If this coordinator accepted speakers the
+    direct entry already owns, every platform would mint a colliding ID
+    and Home Assistant would reject the later entities, leaving registry
+    rows that read unavailable forever.
+    """
+    from homeassistant.helpers import entity_registry as er
+    from homeassistant.helpers import issue_registry as ir
+
+    apollo.devices({"err": None, "data": []})
+    console_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(console_entry.entry_id)
+    await settle(hass)
+    assert console_entry.runtime_data.data == {}
+
+    apollo._mocker.clear_requests()
+    apollo.devices()
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+
+    assert console_entry.runtime_data.data == {}
+    assert set(setup_direct.runtime_data.data) == {AMP_ID, PORT_ID}
+
+    registry = er.async_get(hass)
+    unique_ids = [
+        entry.unique_id
+        for owned in (setup_direct, console_entry)
+        for entry in er.async_entries_for_config_entry(registry, owned.entry_id)
+        if entry.unique_id
+    ]
+    assert len(unique_ids) == len(set(unique_ids))
+
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, "speakers_already_covered")
+    assert issue is not None
+    assert issue.translation_key == "speakers_already_covered"
+    assert issue.translation_placeholders is not None
+    assert issue.translation_placeholders["entry"] == "UniFi Play (Direct)"
+    assert "Living Room" in issue.translation_placeholders["names"]
+    assert "Kitchen" in issue.translation_placeholders["names"]
+
+
+async def test_unloading_the_other_entry_lets_the_console_adopt_the_speakers(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    console_entry: MockConfigEntry,
+    apollo: ApolloServer,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """The repair is about the overlap, not about the console being invalid."""
+    from homeassistant.helpers import issue_registry as ir
+
+    apollo.devices({"err": None, "data": []})
+    console_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(console_entry.entry_id)
+    await settle(hass)
+
+    apollo._mocker.clear_requests()
+    apollo.devices()
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+    assert console_entry.runtime_data.data == {}
+
+    assert await hass.config_entries.async_unload(setup_direct.entry_id)
+    await hass.async_block_till_done()
+
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+
+    assert set(console_entry.runtime_data.data) == {AMP_ID, PORT_ID}
+    assert ir.async_get(hass).async_get_issue(DOMAIN, "speakers_already_covered") is None
+    assert hass.states.get("media_player.living_room") is not None
+
+
+async def test_a_later_unique_speaker_is_still_adopted_beside_an_overlap(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    console_entry: MockConfigEntry,
+    apollo: ApolloServer,
+    third: FakeDevice,
+    settle,
+) -> None:
+    """The guard is per speaker, not a lock on the whole console entry."""
+    apollo.devices({"err": None, "data": []})
+    console_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(console_entry.entry_id)
+    await settle(hass)
+
+    apollo._mocker.clear_requests()
+    apollo.devices(
+        {
+            "err": None,
+            "data": [
+                device_dict(),
+                device_dict(
+                    device_id=PORT_ID,
+                    mac=PORT_MAC,
+                    ip=PORT_IP,
+                    name="Kitchen",
+                    platform="UPL-PORT",
+                ),
+                third_device(),
+            ],
+        }
+    )
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+
+    assert set(console_entry.runtime_data.data) == {THIRD_ID}
+    assert hass.states.get("media_player.study") is not None
+    assert hass.states.get("media_player.living_room") is not None
 
 
 # ── Setup failure mapping ─────────────────────────────────────────────────

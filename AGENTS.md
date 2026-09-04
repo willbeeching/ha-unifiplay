@@ -154,6 +154,9 @@ config entries covering the same speaker mint colliding IDs; Home Assistant
 rejects the later ones, and which entry loses is a startup race. Rejected
 entities keep their registry rows and read `unavailable` forever.
 `_entry_already_covering()` in `config_flow.py` blocks this at setup.
+A console created while Apollo listed nothing is still a valid entry, so
+the coordinator runs the same MAC check on every discovery poll and
+refuses speakers another loaded entry already owns.
 
 **A registered client is not a connected one.** The coordinator inserts the
 client before dialling out, and `publish_action` drops commands silently while

@@ -121,7 +121,8 @@ async def test_unique_ids_are_mac_based_and_stable(
     """Unique IDs must not change: a rename orphans every registry row.
 
     They are also deliberately not namespaced per entry, which is why
-    ``_entry_already_covering`` blocks two entries reaching one speaker.
+    ``_entry_already_covering`` blocks this at setup and the coordinator
+    refuses a speaker another loaded entry already has.
     """
     from homeassistant.helpers import entity_registry as er
 

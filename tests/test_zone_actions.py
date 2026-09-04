@@ -1023,6 +1023,51 @@ async def test_a_confirmed_write_then_an_app_edit_is_the_next_source(
     assert _written_groups(amp)[0]["name"] == "From the app"
 
 
+async def test_an_app_edit_before_readback_is_the_next_source(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """Speakers that agree on a later Play-app edit have overwritten us.
+
+    The pending snapshot exists so a stale pre-write echo does not undo a
+    rename. It is not a lock: Home Assistant and the app are equal peers,
+    and once every speaker is serving the app's document the next mutation
+    has to build from that, not from the older HA name.
+    """
+    writer = _writer(hass, synced_zone)
+    writer.rename(ZONE_ID, "Ground Floor")
+
+    from_app = groups_body(name="From the app")
+    amp.emit("groups", from_app)
+    port.emit("groups", from_app)
+    await settle(hass)
+    amp.clear()
+
+    writer.set_index(ZONE_ID, 3)
+    assert _written_groups(amp)[0]["name"] == "From the app"
+
+
+async def test_a_partial_app_edit_keeps_the_pending_write(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """One speaker on the app's name and one still on the old is mid-edit."""
+    writer = _writer(hass, synced_zone)
+    writer.rename(ZONE_ID, "Ground Floor")
+    amp.emit("groups", groups_body(name="From the app"))
+    await settle(hass)
+    amp.clear()
+
+    writer.set_index(ZONE_ID, 3)
+    assert _written_groups(amp)[0]["name"] == "Ground Floor"
+
+
 async def test_a_second_write_supersedes_the_first_re_read_series(
     hass: HomeAssistant, synced_zone: MockConfigEntry
 ) -> None:

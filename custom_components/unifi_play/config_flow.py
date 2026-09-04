@@ -47,7 +47,7 @@ from .const import (
 )
 from .coordinator import UnifiPlayCoordinator, UnifiPlayGroupState
 from .discovery import async_resolve_direct
-from .helpers import mac_normalise, resolve_device
+from .helpers import entry_covering_macs, mac_normalise, resolve_device
 from .zone_writer import ZoneWriteResult
 
 _LOGGER = logging.getLogger(__name__)
@@ -125,6 +125,11 @@ def _entry_already_covering(
     is only visible once the hardware has actually been discovered, which is
     why this runs after validation rather than at the top of the step.
 
+    An empty device list is a valid setup — the console answered — so this
+    cannot be the only check. The coordinator runs the same test on every
+    discovery poll, because a console created while Apollo listed nothing
+    can later find speakers a direct entry already owns.
+
     Only loaded entries can be checked, since an entry that failed to set up
     has no coordinator and no known devices. That is the right bias: an entry
     which is not running is not claiming anything.
@@ -134,19 +139,11 @@ def _entry_already_covering(
     would let the duplicate through on the one path where state is already
     inconsistent.
     """
-    macs = {mac_normalise(d.get("mac", "")) for d in devices if d.get("mac")}
-    if not macs:
-        return None
-    for entry in hass.config_entries.async_loaded_entries(DOMAIN):
-        if exclude_entry_id is not None and entry.entry_id == exclude_entry_id:
-            continue
-        coordinator = entry.runtime_data
-        covered = {
-            mac_normalise(state.mac) for state in coordinator.data.values() if state.mac
-        }
-        if covered & macs:
-            return entry.title
-    return None
+    return entry_covering_macs(
+        hass,
+        (d.get("mac", "") for d in devices),
+        exclude_entry_id=exclude_entry_id,
+    )
 
 
 class UnifiPlayConfigFlow(ConfigFlow, domain=DOMAIN):

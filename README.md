@@ -464,7 +464,9 @@ Setup reports a specific reason for each failure. Find your message below:
 Setup succeeds but no devices appear? The API answered with an empty list, so your
 address and key are fine — the console just has no Play hardware visible yet. Devices
 are re-checked every 5 minutes, so there is no need to reload the integration once
-they appear.
+they appear. If a direct-mode entry is already managing those speakers, this entry
+will leave them there and raise a repair: unique IDs are MAC-based, and a second
+entry covering the same hardware creates no entities at all.
 
 To probe the Apollo API by hand (including how to tell "no Apollo" from "bad key"),
 see [docs/apollo.md](docs/apollo.md).

@@ -510,6 +510,12 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # Mutations serialise against this snapshot until readback confirms
         # it or the speakers converge on something else.
         self._pending_groups: dict[str, UnifiPlayGroupState] | None = None
+        # Signatures of coordinator.groups at the moment of the write, so a
+        # later Play-app edit can be told from a stale echo of the same
+        # pre-write document. Without this, speakers that all agree on the
+        # app's name still leave the older HA name in the snapshot, and the
+        # next mutation replays it.
+        self._pending_baseline: dict[str, tuple[Any, ...]] | None = None
         self._zone_writer = ZoneWriter(self)
         # Cancel handles for the post-write zone re-reads, so shutdown can
         # take them down rather than leaving them to fire into a coordinator
@@ -558,9 +564,39 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             except OSError as err:
                 raise UpdateFailed(f"Discovery socket error: {err}") from err
 
+        # Unique IDs are MAC-based, not per-entry. A console created while
+        # Apollo listed nothing is a valid entry; the speakers it later
+        # finds may already belong to a direct entry that was running the
+        # whole time. Claiming them here would mint a colliding unique ID
+        # for every platform.
+        # helpers imports this module at load time, so the lookup is local.
+        from .helpers import entry_covering_macs
+
+        entry = self.config_entry
+        exclude_entry_id = entry.entry_id if entry is not None else None
+        overlapped: dict[str, tuple[str, str]] = {}
         for dev in devices:
             dev_id = dev["id"]
+            mac = dev.get("mac", "")
             if dev_id not in self._device_states:
+                if mac and (
+                    existing := entry_covering_macs(
+                        self.hass,
+                        [mac],
+                        exclude_entry_id=exclude_entry_id,
+                    )
+                ):
+                    name = str(dev.get("name") or mac)
+                    overlapped[_norm_mac(mac)] = (name, existing)
+                    _LOGGER.warning(
+                        "Not claiming %s (%s): already managed by %r. Two "
+                        "entries covering the same speaker mint colliding "
+                        "unique IDs",
+                        name,
+                        mac,
+                        existing,
+                    )
+                    continue
                 state = UnifiPlayDeviceState(dev)
                 self._device_states[dev_id] = state
                 _LOGGER.info(
@@ -587,9 +623,10 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 if dev.get("firmware"):
                     state.firmware = dev["firmware"]
             ip = dev.get("ip", "")
-            mac = dev.get("mac", "")
             if ip and mac:
                 await self._ensure_mqtt(dev_id, ip, mac)
+
+        self._async_update_overlap_issue(overlapped)
 
         # A retained speaker the sweep did not re-list still needs its
         # client rebuilt once retries are exhausted. Audio Port never
@@ -805,6 +842,36 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
 
     def _async_delete_cert_issue(self, mac: str) -> None:
         ir.async_delete_issue(self.hass, DOMAIN, self._cert_issue_id(mac))
+
+    def _overlap_issue_id(self) -> str:
+        return "speakers_already_covered"
+
+    def _async_update_overlap_issue(
+        self, overlapped: dict[str, tuple[str, str]]
+    ) -> None:
+        """Open or clear the repair that says another entry already owns these.
+
+        A console created while Apollo listed nothing is a valid entry, so
+        the config-flow guard never saw the hardware. When a later poll
+        finds speakers another loaded entry already manages, refusing them
+        is silent unless something stays visible: the colliding unique IDs
+        only appear in the log, and the console entry just looks empty.
+        """
+        issue_id = self._overlap_issue_id()
+        if not overlapped:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            return
+        names = ", ".join(sorted({name for name, _title in overlapped.values()}))
+        other = next(iter(overlapped.values()))[1]
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="speakers_already_covered",
+            translation_placeholders={"names": names, "entry": other},
+        )
 
     @callback
     def _handle_event(
@@ -1132,7 +1199,17 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 and _member_macs(old) == _member_macs(gs)
             ):
                 gs.host_mac = old.host_mac
+        # Device-reported view, not the write snapshot: a second mutation
+        # before readback must still be compared against what the speakers
+        # last served, not against the previous pending document.
+        self._pending_baseline = {
+            gid: _zone_signature(gs) for gid, gs in self.groups.items()
+        }
         self._pending_groups = pending
+
+    def _clear_pending_groups(self) -> None:
+        self._pending_groups = None
+        self._pending_baseline = None
 
     def reconcile_pending_groups(self) -> None:
         """Drop the pending snapshot once readback confirms the write.
@@ -1140,9 +1217,14 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         Matching signatures (host excluded) means the speakers have applied
         it. A stale copy — the normal window after a write — must not drop
         the snapshot: that is the report that would undo a rename if the
-        next mutation rebuilt from it. An app edit that arrives after
-        confirmation is already the new ``groups``; one that arrives before
-        is last-writer-wins, same as any other overlapping edit.
+        next mutation rebuilt from it.
+
+        Home Assistant and the Play app are equal peers. If every copy we
+        have agrees on a document that is neither what we submitted nor
+        what the speakers served when we wrote, another peer wrote last
+        and the snapshot would replay the older HA value on the next
+        mutation. Speakers that still disagree are mid-edit; keep the
+        snapshot until they converge.
         """
         if self._pending_groups is None:
             return
@@ -1151,7 +1233,13 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         }
         current_sigs = {gid: _zone_signature(gs) for gid, gs in self.groups.items()}
         if pending_sigs == current_sigs:
-            self._pending_groups = None
+            self._clear_pending_groups()
+            return
+        if current_sigs == self._pending_baseline:
+            return
+        if self._conflicted_zones:
+            return
+        self._clear_pending_groups()
 
     def zone_documents(
         self, group_id: str, updated: dict[str, Any] | None
@@ -1316,7 +1404,8 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             await client.disconnect()
         self._mqtt_clients.clear()
         self._mqtt_offline_reason.clear()
-        self._pending_groups = None
+        self._clear_pending_groups()
+        self._async_update_overlap_issue({})
         self._discovery_misses.clear()
         # Nothing to close: the API client borrows Home Assistant's shared
         # session, which Home Assistant closes on shutdown.
