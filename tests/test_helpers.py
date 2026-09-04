@@ -9,6 +9,7 @@ the actions would have refused.
 from __future__ import annotations
 
 import logging
+from unittest.mock import patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -176,12 +177,50 @@ def test_via_device_link_uses_whichever_form_this_ha_understands(
         assert link == {"via_device": identifier}
 
 
-def test_via_device_link_is_empty_when_the_host_is_not_registered(
+def test_via_device_link_uses_the_registry_id_when_lookup_exists(
+    hass: HomeAssistant, setup_direct: MockConfigEntry
+) -> None:
+    """The 2026.9 helper is absent on the floor, so both lanes stub it.
+
+    Leaving this branch to the latest lane alone dropped helpers.py
+    below 95% on the minimum coverage gate.
+    """
+    identifier = (DOMAIN, AMP_MAC)
+    host = next(
+        device
+        for device in dr.async_entries_for_config_entry(
+            dr.async_get(hass), setup_direct.entry_id
+        )
+        if identifier in device.identifiers
+    )
+
+    def _lookup(_hass: HomeAssistant, ident: tuple[str, str], **_kwargs: object) -> str:
+        assert ident == identifier
+        return host.id
+
+    with patch(
+        "custom_components.unifi_play.helpers.dr.async_get_device_id_by_identifier",
+        _lookup,
+        create=True,
+    ):
+        assert via_device_link(hass, setup_direct.entry_id, identifier) == {
+            "via_device_id": host.id
+        }
+
+
+def test_via_device_link_is_empty_when_the_lookup_raises(
     hass: HomeAssistant, setup_direct: MockConfigEntry
 ) -> None:
     """The zone still exists; it just has no parent until the host is."""
-    import homeassistant.helpers.device_registry as device_registry
 
-    if not hasattr(device_registry, "async_get_device_id_by_identifier"):
-        pytest.skip("via_device_id lookup is not on this Home Assistant")
-    assert via_device_link(hass, setup_direct.entry_id, (DOMAIN, "DEADBEEF0000")) == {}
+    def _raise(*_args: object, **_kwargs: object) -> str:
+        raise ValueError("unknown identifier")
+
+    with patch(
+        "custom_components.unifi_play.helpers.dr.async_get_device_id_by_identifier",
+        _raise,
+        create=True,
+    ):
+        assert (
+            via_device_link(hass, setup_direct.entry_id, (DOMAIN, "DEADBEEF0000")) == {}
+        )

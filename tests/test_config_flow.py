@@ -529,6 +529,9 @@ async def test_reauth_accepts_a_new_key(
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_API_KEY: "a-replacement-key"}
     )
+    # The abort reloads the entry. Without waiting, teardown races the
+    # in-flight setup and fails on the store write it scheduled.
+    await hass.async_block_till_done()
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
     assert console_entry.data[CONF_API_KEY] == "a-replacement-key"
