@@ -276,3 +276,16 @@ EVENT_ZONE_MEMBER_CHANGED = "unifi_play_zone_member_changed"
 #: copy. Spread out because election timing is not specified anywhere and has
 #: been observed to take a while on some firmware.
 HOST_ELECTION_REREAD_DELAYS = (3, 10, 30)
+
+#: Unconfirmed HA zone documents remembered so a delayed echo of an
+#: earlier write is not treated as a Play-app edit. Deduplicated, oldest
+#: evicted first. Without a cap, a speaker that keeps serving an old
+#: document (or goes silent) plus an automation that keeps writing would
+#: grow the list without limit, and each write restarts the re-read
+#: series so expiry never runs.
+MAX_OUTSTANDING_WRITES = 8
+
+#: Seconds after the last host-election re-read to drop an unconfirmed
+#: write if the speakers have not reported it. The re-read series
+#: restarts on every mutation, so this only fires once writes stop.
+PENDING_WRITE_EXPIRE_GRACE = 5

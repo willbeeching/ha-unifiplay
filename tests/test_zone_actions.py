@@ -8,14 +8,25 @@ with nothing in the log. Everything here is about that not happening.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
-from custom_components.unifi_play.const import DOMAIN
+from custom_components.unifi_play.const import (
+    DOMAIN,
+    HOST_ELECTION_REREAD_DELAYS,
+    MAX_OUTSTANDING_WRITES,
+    PENDING_WRITE_EXPIRE_GRACE,
+)
 from custom_components.unifi_play.zone_writer import ZoneWriteError, ZoneWriteResult
 
 from .conftest import entry_coordinator
@@ -1101,6 +1112,116 @@ async def test_a_delayed_echo_of_an_earlier_write_is_not_an_app_edit(
     written = _written_groups(amp)[0]
     assert written["name"] == "Upstairs"
     assert written["group_index"] == 7
+
+
+async def test_unconfirmed_write_history_is_deduplicated_and_bounded(
+    hass: HomeAssistant, synced_zone: MockConfigEntry
+) -> None:
+    """A speaker that keeps serving an old document must not grow history.
+
+    Each successful zone action used to append a full signature map, and
+    the list cleared only on a confirming or foreign groups document.
+    Repeating the same write, or an automation storm that restarts the
+    re-read series, would grow it without limit.
+    """
+    writer = _writer(hass, synced_zone)
+    coordinator = entry_coordinator(hass, synced_zone)
+
+    writer.rename(ZONE_ID, "Ground Floor")
+    writer.rename(ZONE_ID, "Ground Floor")
+    writer.rename(ZONE_ID, "Ground Floor")
+    assert len(coordinator._outstanding_writes) == 2
+
+    for index in range(2, 20):
+        writer.set_index(ZONE_ID, index)
+    assert len(coordinator._outstanding_writes) == MAX_OUTSTANDING_WRITES
+    assert coordinator.groups_for_write()[ZONE_ID].group_index == 19
+    assert coordinator.groups_for_write()[ZONE_ID].name == "Ground Floor"
+
+
+async def test_an_unconfirmed_write_expires_after_the_last_reread(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """A stale echo after the last ask is a failed write, not an in-flight one."""
+    writer = _writer(hass, synced_zone)
+    writer.rename(ZONE_ID, "Ground Floor")
+    writer.set_index(ZONE_ID, 7)
+
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=HOST_ELECTION_REREAD_DELAYS[-1])
+    )
+    await hass.async_block_till_done()
+
+    amp.emit("groups", groups_body(name="Ground Floor"))
+    port.emit("groups", groups_body(name="Ground Floor"))
+    await settle(hass)
+
+    pending = entry_coordinator(hass, synced_zone).groups_for_write()
+    assert pending[ZONE_ID].name == "Ground Floor"
+    assert pending[ZONE_ID].group_index == 1
+
+    amp.clear()
+    writer.set_index(ZONE_ID, 3)
+    assert _written_groups(amp)[0]["name"] == "Ground Floor"
+    assert _written_groups(amp)[0]["group_index"] == 3
+
+
+async def test_an_unconfirmed_write_expires_if_speakers_stay_silent(
+    hass: HomeAssistant, synced_zone: MockConfigEntry, amp: FakeDevice
+) -> None:
+    """No groups event after the last re-read still has to drop the snapshot."""
+    writer = _writer(hass, synced_zone)
+    coordinator = entry_coordinator(hass, synced_zone)
+    writer.rename(ZONE_ID, "Ground Floor")
+    assert coordinator._pending_groups is not None
+
+    async_fire_time_changed(
+        hass,
+        dt_util.utcnow()
+        + timedelta(
+            seconds=HOST_ELECTION_REREAD_DELAYS[-1] + PENDING_WRITE_EXPIRE_GRACE
+        ),
+    )
+    await hass.async_block_till_done()
+    assert coordinator._pending_groups is None
+
+    amp.clear()
+    writer.set_index(ZONE_ID, 3)
+    assert _written_groups(amp)[0]["name"] == ZONE_NAME
+
+
+async def test_a_confirmed_write_survives_the_expiry_timer(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """The expiry path is for an unconfirmed write, not a successful one."""
+    writer = _writer(hass, synced_zone)
+    writer.rename(ZONE_ID, "Ground Floor")
+    confirmed = groups_body(name="Ground Floor")
+    amp.emit("groups", confirmed)
+    port.emit("groups", confirmed)
+    await settle(hass)
+    assert entry_coordinator(hass, synced_zone)._pending_groups is None
+
+    async_fire_time_changed(
+        hass,
+        dt_util.utcnow()
+        + timedelta(
+            seconds=HOST_ELECTION_REREAD_DELAYS[-1] + PENDING_WRITE_EXPIRE_GRACE
+        ),
+    )
+    await hass.async_block_till_done()
+
+    amp.clear()
+    writer.set_index(ZONE_ID, 3)
+    assert _written_groups(amp)[0]["name"] == "Ground Floor"
 
 
 async def test_a_second_write_supersedes_the_first_re_read_series(

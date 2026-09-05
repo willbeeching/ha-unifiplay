@@ -29,6 +29,8 @@ from .const import (
     EVENT_ZONE_MEMBER_CHANGED,
     EVENT_ZONE_RENAMED,
     HOST_ELECTION_REREAD_DELAYS,
+    MAX_OUTSTANDING_WRITES,
+    PENDING_WRITE_EXPIRE_GRACE,
     parse_firmware_version,
 )
 from .discovery import async_resolve_direct
@@ -517,8 +519,16 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # that until readback. Speakers then echoed the first mutation;
         # that matched neither the new pending state nor the reset
         # baseline, so reconcile treated it as an app edit and discarded
-        # the newer write.
+        # the newer write. Deduplicated and capped: a speaker that keeps
+        # serving an old document, or goes silent, plus an automation
+        # that keeps writing (and restarts the re-read series) would
+        # otherwise grow this without limit.
         self._outstanding_writes: list[dict[str, tuple[Any, ...]]] = []
+        # Set when the last host-election re-read is issued. A stale
+        # echo after that is a failed confirmation, not an in-flight
+        # write: the speakers were asked again and still have an older
+        # document.
+        self._final_reread_done = False
         self._zone_writer = ZoneWriter(self)
         # Cancel handles for the post-write zone re-reads, so shutdown can
         # take them down rather than leaving them to fire into a coordinator
@@ -1219,25 +1229,55 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 and _member_macs(old) == _member_macs(gs)
             ):
                 gs.host_mac = old.host_mac
-        # Keep every earlier HA-submitted signature until the newest write
-        # is confirmed. Resetting a single baseline to `self.groups` on
-        # each adopt loses the first mutation: speakers then echo that
-        # write, it matches neither the new pending document nor the
-        # pre-write groups we just stored, and reconcile discards the
-        # newer change as if the app had overwritten us.
+        # Keep earlier HA-submitted signatures until the newest write is
+        # confirmed. Resetting a single baseline to `self.groups` on each
+        # adopt loses the first mutation: speakers then echo that write,
+        # it matches neither the new pending document nor the pre-write
+        # groups we just stored, and reconcile discards the newer change
+        # as if the app had overwritten us.
         if self._pending_groups is None:
-            self._outstanding_writes = [
+            self._outstanding_writes = []
+            self._remember_outstanding(
                 {gid: _zone_signature(gs) for gid, gs in self.groups.items()}
-            ]
+            )
         else:
-            self._outstanding_writes.append(
+            self._remember_outstanding(
                 {gid: _zone_signature(gs) for gid, gs in self._pending_groups.items()}
             )
         self._pending_groups = pending
 
+    def _remember_outstanding(self, signatures: dict[str, tuple[Any, ...]]) -> None:
+        """Record an unconfirmed HA document, without growing without bound."""
+        if signatures in self._outstanding_writes:
+            return
+        self._outstanding_writes.append(signatures)
+        overflow = len(self._outstanding_writes) - MAX_OUTSTANDING_WRITES
+        if overflow > 0:
+            del self._outstanding_writes[:overflow]
+
     def _clear_pending_groups(self) -> None:
         self._pending_groups = None
         self._outstanding_writes = []
+        self._final_reread_done = False
+
+    def _abandon_unconfirmed_write(self, reason: str) -> None:
+        if self._pending_groups is None:
+            return
+        _LOGGER.info("Dropping unconfirmed zone write: %s", reason)
+        self._clear_pending_groups()
+
+    @callback
+    def _expire_unconfirmed_write(self, _now: datetime | None = None) -> None:
+        """Give up once the last re-read has had time to come back.
+
+        Speakers that accept a publish and keep serving an older document,
+        or that go silent, never confirm. The snapshot would otherwise
+        sit until the next groups event, and an automation that keeps
+        writing would only restart this timer.
+        """
+        self._abandon_unconfirmed_write(
+            "speakers did not confirm after the last re-read"
+        )
 
     def reconcile_pending_groups(self) -> None:
         """Drop the pending snapshot once readback confirms the newest write.
@@ -1248,12 +1288,14 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         is the report that would undo a rename or an index change if the
         next mutation rebuilt from it.
 
-        Home Assistant and the Play app are equal peers. If every copy we
-        have agrees on a document that is neither what we last submitted
-        nor any earlier HA write still outstanding, another peer wrote
-        last and the snapshot would replay the older HA value on the next
-        mutation. Speakers that still disagree are mid-edit; keep the
-        snapshot until they converge.
+        After the last confirmation re-read, a stale echo is a failed
+        write, not an in-flight one. Home Assistant and the Play app are
+        equal peers: if every copy we have agrees on a document that is
+        neither what we last submitted nor any earlier HA write still
+        outstanding, another peer wrote last and the snapshot would
+        replay the older HA value on the next mutation. Speakers that
+        still disagree are mid-edit; keep the snapshot until they
+        converge.
         """
         if self._pending_groups is None:
             return
@@ -1265,6 +1307,10 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             self._clear_pending_groups()
             return
         if current_sigs in self._outstanding_writes:
+            if self._final_reread_done:
+                self._abandon_unconfirmed_write(
+                    "last re-read still reported an earlier document"
+                )
             return
         if self._conflicted_zones:
             return
@@ -1330,6 +1376,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # the host of the zone last written, so restarting it is both cheaper
         # and more correct than stacking two sets of timers.
         self._cancel_host_reread()
+        self._final_reread_done = False
 
         @callback
         def _reread(_now: datetime | None = None) -> None:
@@ -1337,13 +1384,32 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 if client is not None and client.is_connected:
                     client.request_groups()
 
-        for delay in HOST_ELECTION_REREAD_DELAYS:
+        @callback
+        def _final_reread(_now: datetime | None = None) -> None:
+            self._final_reread_done = True
+            _reread()
+
+        *early, last = HOST_ELECTION_REREAD_DELAYS
+        for delay in early:
             # Held so shutdown can cancel them. A re-read that fires thirty
             # seconds after the entry unloaded is a task outliving its owner,
             # which is how a reload ends up with two of everything.
             self._host_reread_cancels.append(
                 async_call_later(self.hass, delay, _reread)
             )
+        self._host_reread_cancels.append(
+            async_call_later(self.hass, last, _final_reread)
+        )
+        # The series restarts on every mutation, so this only runs once
+        # writes stop. Combined with the history cap it is the failure
+        # path for a speaker that never confirms.
+        self._host_reread_cancels.append(
+            async_call_later(
+                self.hass,
+                last + PENDING_WRITE_EXPIRE_GRACE,
+                self._expire_unconfirmed_write,
+            )
+        )
 
     def get_mqtt_client(self, device_id: str) -> UnifiPlayMqttClient | None:
         """Return the MQTT client for a device."""
