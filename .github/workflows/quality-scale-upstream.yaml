@@ -1,0 +1,37 @@
+name: Quality scale upstream
+
+# Pull-request CI compares the tracker to the pinned rule list and must
+# stay offline. This job is the one that notices Home Assistant adding a
+# rule: it fetches hassfest ALL_RULES and fails when the pin is stale.
+# When it fails, add the rule to OFFICIAL_RULES and give it a status in
+# quality_scale.yaml. Until this file is on master it only runs by hand.
+
+on:
+  schedule:
+    # Monday morning UTC. Hassfest changes land in batches, not hourly.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
+jobs:
+  upstream:
+    name: Official rule snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # The tracker check needs PyYAML. The fetch is stdlib urllib.
+      - name: Install PyYAML
+        run: pip install PyYAML
+
+      - name: Compare the pinned rule list to hassfest
+        run: python scripts/check_quality_scale.py --check-upstream

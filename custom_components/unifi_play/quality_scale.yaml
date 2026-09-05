@@ -28,10 +28,13 @@ rules:
     comment: |
       Home Assistant 2026.3 serves custom-integration icons from
       custom_components/<domain>/brand/; home-assistant/brands no longer
-      accepts those PRs. icon.png is 256x256, icon@2x.png is 512x512, and
-      the logo pair is present. scripts/check_quality_scale.py asserts the
-      files, their dimensions, and that git ls-files would put them in the
-      release archive.
+      accepts those PRs. icon.png is 256x256, icon@2x.png is 512x512.
+      The logo and dark-logo pairs are 1214x256 / 2428x512 — shortest
+      side at the preferred 256 / 512 maximum in
+      https://github.com/home-assistant/brands#logo-image-requirements.
+      scripts/check_quality_scale.py asserts PNG type, those ranges for
+      every supplied logo, that each @2x is exactly twice its 1x pair,
+      and that git ls-files would put them in the release archive.
   common-modules:
     status: done
     comment: coordinator.py and entity.py, with the write path in zone_writer.py.
@@ -202,8 +205,14 @@ rules:
     status: done
     comment: README "How it works" and "When a speaker goes offline".
   docs-examples:
-    status: done
-    comment: An automation on the zone member-changed event.
+    status: todo
+    comment: |
+      The README has an inline automation on
+      unifi_play_zone_member_changed. The current rule requires a
+      blueprint in the official home-assistant.io blueprints folder or
+      on the Blueprint Exchange, with the integration docs linking to
+      it. That has not been published. An inline example is not a
+      substitute.
   docs-known-limitations:
     status: done
     comment: |

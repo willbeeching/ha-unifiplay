@@ -47,7 +47,8 @@ Run all of it before tagging a release.
 | Every `tls_set` uses the bundled pairs | `python scripts/check_cert_generation_users.py` |
 | `set_groups` carries no firmware-owned keys | `python scripts/check_set_groups_payload.py` |
 | No expression reaches a shell script | `python scripts/check_workflow_injection.py` |
-| Quality scale tracker is complete | `python scripts/check_quality_scale.py` |
+| Quality scale tracker matches the pin | `python scripts/check_quality_scale.py` |
+| Official rule pin matches hassfest | `python scripts/check_quality_scale.py --check-upstream` |
 | Release archive builds and verifies | `python scripts/build_release_archive.py` |
 
 The coverage gate is per module, not just overall: 95% for every module and
@@ -81,10 +82,12 @@ CI (both lanes, plus the static guards) proves:
   and expiry after the last re-read.
 - A console that later finds speakers another loaded entry already owns
   refuses them, opens a per-entry repair, and names every owner.
-- Brand assets exist at the sizes Home Assistant 2026.3 serves, and would
-  be in the release archive.
-- The quality-scale tracker contains every official rule and that a `done`
-  names its evidence.
+- Brand assets exist at the sizes Home Assistant 2026.3 serves (icons
+  256/512, logos with shortest side 128–256 / 256–512), and would be in
+  the release archive.
+- The quality-scale tracker contains every *pinned* official rule and
+  that a `done` names its evidence. A new Home Assistant rule is the
+  weekly upstream job, not this suite.
 
 CI does **not** prove, and must not be cited as proving:
 

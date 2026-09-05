@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Refuse a quality-scale tracker that has drifted from Home Assistant.
+"""Refuse a quality-scale tracker that has drifted from this repository's pin.
 
 ``custom_components/unifi_play/quality_scale.yaml`` is a self-assessment.
 Nothing in hassfest grades a custom integration, so a rule marked ``done``
 with no evidence, an exemption with no reason, or a file that quietly
-omits a rule Home Assistant added last month is worse than no file: it
-reads as a completed checklist.
+omits a rule we already know about is worse than no file: it reads as a
+completed checklist.
 
-This checks the tracker against the official rule set published at
-https://developers.home-assistant.io/docs/core/integration-quality-scale/rules/
-(retrieved 2026-09-05). The list is pinned here rather than fetched at
-runtime so CI does not depend on developers.home-assistant.io being up,
-and so a new official rule fails the build until someone records a
-status for it.
+Regular CI compares the tracker to ``OFFICIAL_RULES`` below, which is a
+snapshot of Home Assistant's rule set (hassfest ``ALL_RULES`` and the
+developer docs, retrieved 2026-09-05). The list is pinned so a PR check
+does not depend on GitHub or developers.home-assistant.io being up, and
+so it cannot flap when those sites change. A new official rule does
+**not** fail that build on its own: both the tracker and this pin would
+have to be updated first.
+
+``--check-upstream`` fetches
+https://raw.githubusercontent.com/home-assistant/core/dev/script/hassfest/quality_scale.py
+and fails when the pin no longer matches hassfest. That is a scheduled
+job, not pull-request CI. When it fails, add the rule here and give it
+a status in the tracker.
 
 It also fails when:
 
@@ -29,9 +36,13 @@ a custom integration; the tracker is the assessment, not a hassfest grade.
 
 from __future__ import annotations
 
+import argparse
 import json
+import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -44,9 +55,9 @@ PACKAGE = Path("custom_components/unifi_play")
 
 ALLOWED_STATUSES = frozenset({"done", "exempt", "todo"})
 
-#: Official Quality Scale rules as of the 2026-09-05 developer docs.
-#: A rule appearing here but not in the tracker, or the other way around,
-#: is the file falling behind Home Assistant.
+#: Official Quality Scale rules as of hassfest / developer docs 2026-09-05.
+#: Compared to the tracker on every CI run. Compared to live hassfest only
+#: when ``--check-upstream`` is passed.
 OFFICIAL_RULES: dict[str, str] = {
     # Bronze
     "action-setup": "bronze",
@@ -121,7 +132,26 @@ ALLOWED_BRAND_FILES = frozenset(
     }
 )
 
+ICON_SIZES = {"icon.png": (256, 256), "icon@2x.png": (512, 512)}
+DARK_ICON_SIZES = {
+    "dark_icon.png": (256, 256),
+    "dark_icon@2x.png": (512, 512),
+}
+
+# https://github.com/home-assistant/brands#logo-image-requirements
+# Shortest side: 128-256 (1x), 256-512 (hDPI). The maximum is preferred.
+LOGO_SHORTEST = {False: (128, 256), True: (256, 512)}
+
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+HASSFEST_QUALITY_SCALE = (
+    "https://raw.githubusercontent.com/home-assistant/core/dev/"
+    "script/hassfest/quality_scale.py"
+)
+UPSTREAM_RULE = re.compile(
+    r'Rule\("([a-z0-9-]+)",\s*ScaledQualityScaleTiers\.'
+    r"(BRONZE|SILVER|GOLD|PLATINUM)"
+)
 
 
 def _entry(value: object) -> tuple[str, str]:
@@ -155,6 +185,56 @@ def tracked_package_files() -> set[str]:
     return {name for name in out.split("\0") if name}
 
 
+def _read_png(path: Path, failures: list[str]) -> tuple[int, int] | None:
+    try:
+        return png_size(path)
+    except ValueError as err:
+        failures.append(str(err))
+        return None
+
+
+def check_logo_asset(path: Path, failures: list[str]) -> tuple[int, int] | None:
+    """A supplied logo must meet the brands shortest-side ranges."""
+    size = _read_png(path, failures)
+    if size is None:
+        return None
+    hdpi = "@2x" in path.name
+    low, high = LOGO_SHORTEST[hdpi]
+    shortest = min(size)
+    if not low <= shortest <= high:
+        kind = "hDPI" if hdpi else "normal"
+        failures.append(
+            f"{path.name} is {size[0]}x{size[1]} (shortest side {shortest}); "
+            f"Home Assistant {kind} logos need the shortest side "
+            f"{low}-{high}px"
+        )
+    return size
+
+
+def check_logo_pair(base: str, failures: list[str]) -> None:
+    """1x and @2x of the same logo, when both exist, must be exact doubles."""
+    one = BRAND_DIR / f"{base}.png"
+    two = BRAND_DIR / f"{base}@2x.png"
+    if not one.is_file() and two.is_file():
+        failures.append(f"{two.name} is present without {one.name}")
+        check_logo_asset(two, failures)
+        return
+    if not one.is_file():
+        return
+    size_one = check_logo_asset(one, failures)
+    if not two.is_file():
+        return
+    size_two = check_logo_asset(two, failures)
+    if size_one is None or size_two is None:
+        return
+    expected = (size_one[0] * 2, size_one[1] * 2)
+    if size_two != expected:
+        failures.append(
+            f"{two.name} is {size_two[0]}x{size_two[1]}, "
+            f"expected {expected[0]}x{expected[1]}"
+        )
+
+
 def check_brands(failures: list[str]) -> None:
     """The local brand files Home Assistant 2026.3 serves from brand/."""
     if not BRAND_DIR.is_dir():
@@ -169,48 +249,28 @@ def check_brands(failures: list[str]) -> None:
             "brand/ contains files Home Assistant will not serve: "
             + ", ".join(sorted(unexpected))
         )
-    for required, expected in (("icon.png", (256, 256)), ("logo.png", None)):
-        path = BRAND_DIR / required
+    icon = BRAND_DIR / "icon.png"
+    if not icon.is_file():
+        failures.append(f"brands is done but {icon.relative_to(REPO)} is missing")
+    for name, expected in {**ICON_SIZES, **DARK_ICON_SIZES}.items():
+        path = BRAND_DIR / name
         if not path.is_file():
-            failures.append(f"brands is done but {path.relative_to(REPO)} is missing")
             continue
-        try:
-            size = png_size(path)
-        except ValueError as err:
-            failures.append(str(err))
-            continue
-        if expected is not None and size != expected:
+        size = _read_png(path, failures)
+        if size is not None and size != expected:
             failures.append(
                 f"{path.name} is {size[0]}x{size[1]}, Home Assistant icons are "
                 f"{expected[0]}x{expected[1]}"
             )
-    icon_2x = BRAND_DIR / "icon@2x.png"
-    if icon_2x.is_file():
-        try:
-            size = png_size(icon_2x)
-        except ValueError as err:
-            failures.append(str(err))
-        else:
-            if size != (512, 512):
-                failures.append(f"icon@2x.png is {size[0]}x{size[1]}, expected 512x512")
     logo = BRAND_DIR / "logo.png"
-    logo_2x = BRAND_DIR / "logo@2x.png"
-    if logo.is_file() and logo_2x.is_file():
-        try:
-            base = png_size(logo)
-            double = png_size(logo_2x)
-        except ValueError as err:
-            failures.append(str(err))
-        else:
-            if double != (base[0] * 2, base[1] * 2):
-                failures.append(
-                    f"logo@2x.png is {double[0]}x{double[1]}, "
-                    f"expected {base[0] * 2}x{base[1] * 2}"
-                )
+    if not logo.is_file():
+        failures.append(f"brands is done but {logo.relative_to(REPO)} is missing")
+    check_logo_pair("logo", failures)
+    check_logo_pair("dark_logo", failures)
     tracked = tracked_package_files()
     required_in_archive = [
         str(PACKAGE / "brand" / name)
-        for name in ("icon.png", "icon@2x.png", "logo.png", "logo@2x.png")
+        for name in sorted(ALLOWED_BRAND_FILES)
         if (BRAND_DIR / name).is_file()
     ]
     missing = [name for name in required_in_archive if name not in tracked]
@@ -221,15 +281,71 @@ def check_brands(failures: list[str]) -> None:
         )
 
 
-def main() -> int:
-    failures: list[str] = []
+def parse_upstream_rules(source: str) -> dict[str, str]:
+    """Rule names and tiers from hassfest's ALL_RULES list."""
+    found = {
+        match.group(1): match.group(2).lower()
+        for match in UPSTREAM_RULE.finditer(source)
+    }
+    if len(found) < 40:
+        raise ValueError(
+            "upstream hassfest quality_scale.py did not contain a plausible "
+            f"ALL_RULES list ({len(found)} names parsed)"
+        )
+    return found
+
+
+def fetch_upstream_rules(url: str) -> dict[str, str]:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "ha-unifiplay-quality-scale-check"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            source = response.read().decode("utf-8")
+    except urllib.error.URLError as err:
+        raise ValueError(f"could not fetch {url}: {err}") from err
+    return parse_upstream_rules(source)
+
+
+def check_upstream(failures: list[str], url: str) -> None:
+    """The pin, not the tracker, against live hassfest."""
+    try:
+        upstream = fetch_upstream_rules(url)
+    except ValueError as err:
+        failures.append(str(err))
+        return
+    missing = [name for name in upstream if name not in OFFICIAL_RULES]
+    extra = [name for name in OFFICIAL_RULES if name not in upstream]
+    if missing:
+        failures.append(
+            "OFFICIAL_RULES is missing rules hassfest now publishes: "
+            + ", ".join(missing)
+            + ". Add them here and give each a status in quality_scale.yaml."
+        )
+    if extra:
+        failures.append(
+            "OFFICIAL_RULES has rules hassfest no longer publishes: " + ", ".join(extra)
+        )
+    tier = [
+        f"{name}: pinned {OFFICIAL_RULES[name]}, hassfest {upstream[name]}"
+        for name in OFFICIAL_RULES
+        if name in upstream and OFFICIAL_RULES[name] != upstream[name]
+    ]
+    if tier:
+        failures.append(
+            "OFFICIAL_RULES tiers no longer match hassfest: " + "; ".join(tier)
+        )
+
+
+def check_tracker(failures: list[str]) -> dict[str, object] | None:
     if not TRACKER.is_file():
         print(f"quality scale tracker not found: {TRACKER}", file=sys.stderr)
-        return 2
+        return None
     document = yaml.safe_load(TRACKER.read_text(encoding="utf-8"))
     if not isinstance(document, dict) or not isinstance(document.get("rules"), dict):
         print(f"{TRACKER} has no rules: mapping", file=sys.stderr)
-        return 2
+        return None
     rules = document["rules"]
 
     missing = [name for name in OFFICIAL_RULES if name not in rules]
@@ -240,7 +356,7 @@ def main() -> int:
         )
     if unknown:
         failures.append(
-            "tracker has rules Home Assistant does not publish: " + ", ".join(unknown)
+            "tracker has rules the pinned official list does not: " + ", ".join(unknown)
         )
 
     for name, raw in rules.items():
@@ -264,6 +380,32 @@ def main() -> int:
             f"{manifest['quality_scale']!r}. This is a custom integration; "
             "the tracker is the assessment. Do not put a tier in the manifest."
         )
+    return rules
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
+    parser.add_argument(
+        "--check-upstream",
+        action="store_true",
+        help=(
+            "fetch hassfest ALL_RULES and fail if OFFICIAL_RULES differs. "
+            "Scheduled CI only; pull-request CI stays offline."
+        ),
+    )
+    parser.add_argument(
+        "--upstream-url",
+        default=HASSFEST_QUALITY_SCALE,
+        help=argparse.SUPPRESS,
+    )
+    args = parser.parse_args(argv)
+
+    failures: list[str] = []
+    rules = check_tracker(failures)
+    if rules is None:
+        return 2
+    if args.check_upstream:
+        check_upstream(failures, args.upstream_url)
 
     if not failures:
         print(

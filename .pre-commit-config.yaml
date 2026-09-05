@@ -126,8 +126,9 @@ repos:
       - id: quality-scale
         name: quality scale tracker is complete and honest
         # hassfest does not grade a custom integration. A rule marked done
-        # with no evidence, or a file that omitted a rule Home Assistant
-        # added, would otherwise sit until someone noticed.
+        # with no evidence, or a file that omitted a rule we already pin,
+        # would otherwise sit until someone noticed. New upstream rules
+        # are the scheduled quality-scale-upstream workflow, not this hook.
         entry: python3.13 scripts/check_quality_scale.py
         language: system
         pass_filenames: false
