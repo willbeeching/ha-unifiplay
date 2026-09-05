@@ -123,3 +123,13 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      - id: quality-scale
+        name: quality scale tracker is complete and honest
+        # hassfest does not grade a custom integration. A rule marked done
+        # with no evidence, or a file that omitted a rule Home Assistant
+        # added, would otherwise sit until someone noticed.
+        entry: python3.13 scripts/check_quality_scale.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

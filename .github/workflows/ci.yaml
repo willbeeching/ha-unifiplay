@@ -66,6 +66,13 @@ jobs:
       - name: No expression reaches a shell script
         run: python scripts/check_workflow_injection.py
 
+      # The tracker is a self-assessment. A missing official rule, a done
+      # with no evidence, or a brands claim without the files would
+      # otherwise sit until someone noticed. Needs PyYAML, same as the
+      # workflow-injection check above.
+      - name: Quality scale tracker
+        run: python scripts/check_quality_scale.py
+
   protocol-guards:
     name: Protocol guards
     runs-on: ubuntu-latest

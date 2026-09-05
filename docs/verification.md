@@ -47,6 +47,7 @@ Run all of it before tagging a release.
 | Every `tls_set` uses the bundled pairs | `python scripts/check_cert_generation_users.py` |
 | `set_groups` carries no firmware-owned keys | `python scripts/check_set_groups_payload.py` |
 | No expression reaches a shell script | `python scripts/check_workflow_injection.py` |
+| Quality scale tracker is complete | `python scripts/check_quality_scale.py` |
 | Release archive builds and verifies | `python scripts/build_release_archive.py` |
 
 The coverage gate is per module, not just overall: 95% for every module and
@@ -69,6 +70,36 @@ caught it.
 So the checklist below is not a formality, and no release should go out
 without it. Record the model and firmware version alongside each result; a
 pass on `UPL-AMP` 1.0.38 says nothing about `UPL-PORT` 1.1.10.
+
+## What CI proves, and what it does not
+
+CI (both lanes, plus the static guards) proves:
+
+- Setup, reload, unload, reauth and reconfigure against the three test seams.
+- Zone mutations serialise against the pending snapshot, including a delayed
+  echo of an earlier write, an app edit before readback, history overflow,
+  and expiry after the last re-read.
+- A console that later finds speakers another loaded entry already owns
+  refuses them, opens a per-entry repair, and names every owner.
+- Brand assets exist at the sizes Home Assistant 2026.3 serves, and would
+  be in the release archive.
+- The quality-scale tracker contains every official rule and that a `done`
+  names its evidence.
+
+CI does **not** prove, and must not be cited as proving:
+
+- That a published source value actually routes audio (the PowerAmp / `spdif`
+  case).
+- Home Assistant dhcp / zeroconf / ssdp discovery. The integration's own
+  UDP 10001 probe is tested through a stubbed socket; native HA discovery
+  is not implemented. See `docs/api.md`.
+- Certificate fallback against a live speaker whose CA has rotated.
+- Overlap repairs, pending-write expiry, or rapid HA mutations on hardware.
+- That `paho-mqtt` can be replaced. `async-dependency` stays `todo` until
+  an async client is measured on both models.
+
+This environment has no Play hardware. Anything below that is not ticked
+with a model and firmware was not run here.
 
 ## Hardware smoke test
 
@@ -117,6 +148,11 @@ Run on both models. Note the firmware version of each first
 | Delete the zone | Every member returns to standalone in the app |
 | Create a zone from the Play app while Home Assistant is running | One `unifi_play_zone_created` event, not one per speaker |
 | Restart Home Assistant with zones present | No zone events at all, and no zone entity is destroyed |
+| Two rapid HA mutations (rename, then index) before either speaker reports | The second write carries the first change; a delayed echo of the first does not revert the index |
+| A Play-app rename while an HA write is still pending | Once every speaker agrees on the app's name, the next HA mutation builds from that |
+| Speakers that never confirm a write | After the last re-read plus grace, the snapshot is dropped and the next mutation uses what the speakers are serving |
+| Two config entries that later overlap the same speakers | Each entry has its own repair; unloading one does not delete the other's; the message names every owner |
+| Unload the covering entry | The remaining entry adopts the speakers and its repair closes |
 
 ### Firmware rotation
 

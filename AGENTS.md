@@ -69,6 +69,7 @@ python scripts/check_mqtt_client_calls.py       # the guard on its own
 python scripts/check_mqtt_cert_generations.py   # cert-generation fallback, paho stubbed
 python scripts/check_min_ha_version.py --expect-min   # import smoke + floor check
 python scripts/check_workflow_injection.py      # no ${{ }} reaches a shell script
+python scripts/check_quality_scale.py           # tracker matches the official rules
 python scripts/build_release_archive.py         # the release zip, reproducibly
 python scripts/dump_device.py <DEVICE_IP>       # dump a device's live state
 ```
@@ -77,8 +78,10 @@ Release and hardware verification, including the smoke test to run on both
 models before tagging, is in [`docs/verification.md`](docs/verification.md).
 `custom_components/unifi_play/quality_scale.yaml` records where the
 integration stands against Home Assistant's quality scale, and what is not
-met. Nothing checks that file automatically, so a rule marked `done` has to
-name the test or the code that makes it true.
+met. `scripts/check_quality_scale.py` runs in CI and on push: a missing
+official rule, an unknown one, an exemption with no reason, or a `done`
+with no supporting comment fails the build. The manifest does not claim a
+tier; this is a self-assessment for a custom integration.
 
 Two supported lanes, both run in CI and both must stay green:
 

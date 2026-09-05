@@ -963,3 +963,26 @@ Confirmed absent rather than undiscovered, from the same capture:
 | `UPL-AMP` | PowerAmp |
 | `UPL-PORT` | In-Wall (Port) |
 | `UPL-DEVICE` | Generic/all devices |
+
+### Home Assistant discovery (not implemented)
+
+The integration finds speakers itself. It does **not** register with Home
+Assistant's dhcp, zeroconf or ssdp discovery, so adding it is still a
+manual step. The quality-scale `discovery` rule stays `todo` until a
+matcher can be shown on both models without opening a setup flow for
+something that is not a Play speaker.
+
+What has been measured, and what has not:
+
+| Signal | Observed | Usable as an HA discovery matcher? |
+|---|---|---|
+| UDP 10001 (Ubiquiti v1 probe) | PowerAmp answers with hostname, MAC, IP, platform (`UPL-AMP`) and firmware. Audio Port does not answer ([#5](https://github.com/willbeeching/ha-unifiplay/issues/5)). Same probe WiFiman uses. | The integration already uses this in direct mode. Registering it as HA discovery would still miss every Audio Port. |
+| MQTT topic root `UPL-AMP` / `UPL-PORT` / `UPL-DEVICE` on TCP 8883 | Measured on a PowerAmp `UPL-AMP` / `UPL-Amp-B` (`6C63F8AA2F29`, hostname Garage, firmware `UPL-AMP.qcs405.v1.0.41…`) and used in the MQTT identification fallback for Ports. | Not an HA discovery mechanism. Requires an IP the user or UDP already supplied, plus the bundled client certificate. |
+| DHCP hostname / vendor / Ubiquiti OUI | Not measured on Play hardware in this repository. The Ubiquiti OUI is shared with UniFi APs, cameras and consoles. | Unverified. A hostname or OUI match that also fires for a U6 AP would be a false-positive setup flow. Do not ship it. |
+| Zeroconf / mDNS / SSDP | No Play advertisement has been captured. Packet captures used for `docs/api.md` were MQTT and Apollo HTTP. | Unverified. Absence from those captures is not proof the device never advertises; it is proof nobody here has looked. |
+
+Negative result worth keeping: treating "Ubiquiti" on the LAN as a Play
+speaker is how you get a config flow for an access point. Until someone
+records a hostname pattern, mDNS name or DHCP vendor class that is unique
+to `UPL-AMP` and `UPL-PORT` on named firmware, Home Assistant discovery
+stays unimplemented.

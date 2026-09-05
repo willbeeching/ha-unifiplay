@@ -24,11 +24,14 @@ rules:
       iot_class is local_push: state arrives over MQTT. The five-minute poll
       only asks which devices exist, which is a question nothing pushes.
   brands:
-    status: exempt
+    status: done
     comment: |
-      home-assistant/brands only accepts core and default-listed integrations.
-      The icons and logos are in custom_components/unifi_play/brand/ so they
-      are ready if that changes.
+      Home Assistant 2026.3 serves custom-integration icons from
+      custom_components/<domain>/brand/; home-assistant/brands no longer
+      accepts those PRs. icon.png is 256x256, icon@2x.png is 512x512, and
+      the logo pair is present. scripts/check_quality_scale.py asserts the
+      files, their dimensions, and that git ls-files would put them in the
+      release archive.
   common-modules:
     status: done
     comment: coordinator.py and entity.py, with the write path in zone_writer.py.
@@ -49,8 +52,22 @@ rules:
     status: done
     comment: README "Zone actions" and "Device actions", with parameters and
       the errors each can raise.
+  docs-conditions:
+    status: exempt
+    comment: |
+      The integration contributes no custom conditions. Automations use
+      Home Assistant's standard state and device conditions against the
+      entities it already creates.
+  docs-triggers:
+    status: exempt
+    comment: |
+      The integration contributes no device triggers. Zone topology
+      events (unifi_play_zone_created and the rest) are ordinary Home
+      Assistant events and are consumed with the standard event trigger.
+      README documents that.
   docs-high-level-description:
     status: done
+    comment: README opening paragraph and "How it works".
   docs-installation-instructions:
     status: done
     comment: HACS and manual, including the verified release archive.
@@ -75,6 +92,9 @@ rules:
       already has. tests/test_lifecycle.py::test_a_console_that_later_finds_already_managed_speakers_does_not_claim_them.
   has-entity-name:
     status: done
+    comment: |
+      UnifiPlayEntity sets has_entity_name. tests/test_entity_quality.py
+      fails on a name= or _attr_name beside a translation key.
   runtime-data:
     status: done
     comment: |
@@ -121,6 +141,9 @@ rules:
       parameters and the TLS choice are documented in README.
   docs-installation-parameters:
     status: done
+    comment: |
+      README Requirements and the two connection modes, including the
+      TLS choice for console setup.
   entity-unavailable:
     status: done
     comment: |
@@ -129,6 +152,7 @@ rules:
       is something to read when everything else is not.
   integration-owner:
     status: done
+    comment: manifest.json codeowners is @willbeeching.
   log-when-unavailable:
     status: done
     comment: Once per transition, not once per attempt, and reset on recovery.
@@ -162,11 +186,13 @@ rules:
   discovery:
     status: todo
     comment: |
-      The integration discovers speakers itself over UDP 10001, but does not
-      register with Home Assistant's own discovery, so adding it is a manual
-      step. DHCP discovery on the Ubiquiti OUI looks plausible and has not
-      been verified against hardware, and this repository does not ship
-      protocol assumptions that nobody has measured.
+      The integration discovers speakers itself over UDP 10001, but does
+      not register with Home Assistant's dhcp, zeroconf or ssdp discovery,
+      so adding it is still a manual step. A matcher that is not measured
+      on both models would open false-positive setup flows (the Ubiquiti
+      OUI is shared with APs, cameras and consoles; Audio Port does not
+      answer UDP 10001). docs/api.md records what has been observed and
+      what has not. Do not implement this on a guess.
   discovery-update-info:
     status: done
     comment: |
@@ -180,11 +206,16 @@ rules:
     comment: An automation on the zone member-changed event.
   docs-known-limitations:
     status: done
+    comment: |
+      README and docs/api.md: last-write-wins with the Play app, Audio
+      Port silence on UDP 10001, and the console models that never get
+      Apollo.
   docs-supported-devices:
     status: done
     comment: Both models, with the firmware each was tested against.
   docs-supported-functions:
     status: done
+    comment: README Features lists every platform and what it can do.
   docs-troubleshooting:
     status: done
     comment: |
@@ -192,6 +223,7 @@ rules:
       certificate, and speakers that disagree about a zone.
   docs-use-cases:
     status: done
+    comment: README automation on the zone member-changed event.
   dynamic-devices:
     status: done
     comment: |
@@ -252,11 +284,12 @@ rules:
     status: todo
     comment: |
       paho-mqtt is synchronous. It runs on its own thread via loop_start()
-      and every callback crosses back to the event loop explicitly, which is
-      correct but is not the same thing as an async dependency. Replacing it
-      would mean re-deriving the BinMe framing and the certificate-generation
-      fallback against hardware, so it is not a change to make on the
-      strength of a checklist.
+      and every callback crosses back to the event loop explicitly, which
+      is correct but is not an async dependency. Do not replace it to
+      clear this item. A candidate would have to be verified on both
+      models against mutual TLS (both bundled certificate generations),
+      BinMe framing, reconnect and certificate-fallback, and clean
+      setup/reload/unload/shutdown. That evidence does not exist yet.
   inject-websession:
     status: done
     comment: |
