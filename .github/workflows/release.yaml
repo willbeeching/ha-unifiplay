@@ -88,47 +88,50 @@ jobs:
 
       - name: Generate changelog
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          NUMBER: ${{ steps.version.outputs.number }}
         run: |
           set -euo pipefail
-          # On a tag push the newest tag is the one being released, so the
-          # previous release is the second-newest. On a dispatch the tag does
-          # not exist yet, so the newest existing tag is the previous release.
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          NOTES="docs/releases/v${NUMBER}.md"
+          if [ -f "$NOTES" ]; then
+            # Written notes cover the release. A git-log of subjects since
+            # the previous tag is not a substitute: a stable cut after a
+            # beta would otherwise only list the version bump.
+            cp "$NOTES" release-notes.md
           else
-            PREV_TAG=$(git describe --abbrev=0 --tags "$(git rev-list --tags --skip=1 --max-count=1)" 2>/dev/null || echo "")
+            # Walk back to the previous *stable* tag. A prerelease sitting
+            # between two stables must not shrink the notes to the beta
+            # window. Version sort, skip any tag with a hyphen.
+            PREV_TAG=$(
+              git tag -l 'v*.*.*' --sort=-v:refname \
+                | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                | grep -vx "v${NUMBER}" \
+                | head -1 || true
+            )
+            {
+              echo "## What's Changed"
+              echo
+              if [ -n "$PREV_TAG" ]; then
+                git log "$PREV_TAG..HEAD" --pretty=format:'- %s' --no-merges
+              else
+                git log --pretty=format:'- %s' --no-merges
+              fi
+              echo
+              echo "## Install"
+              echo
+              echo "HACS installs from the repository as usual. For a manual install,"
+              echo "download \`unifi_play.zip\` and unpack it into"
+              echo "\`config/custom_components/\`, then restart Home Assistant."
+              echo
+              echo "The archive is built from the tagged commit with fixed timestamps"
+              echo "and file modes, so rebuilding it from this tag reproduces the"
+              echo "published checksum:"
+              echo
+              echo '```'
+              echo "python scripts/build_release_archive.py"
+              echo "sha256sum -c dist/unifi_play.zip.sha256"
+              echo '```'
+            } > release-notes.md
           fi
-          {
-            echo "## What's Changed"
-            echo
-            if [ -n "$PREV_TAG" ]; then
-              git log "$PREV_TAG..HEAD" --pretty=format:'- %s' --no-merges
-            else
-              git log --pretty=format:'- %s' --no-merges
-            fi
-            echo
-          } > release-notes.md
-          # Written to a file rather than a step output: commit subjects
-          # are arbitrary text, and an output is a string that later steps
-          # interpolate.
-          {
-            echo
-            echo "## Install"
-            echo
-            echo "HACS installs from the repository as usual. For a manual install,"
-            echo "download \`unifi_play.zip\` and unpack it into"
-            echo "\`config/custom_components/\`, then restart Home Assistant."
-            echo
-            echo "The archive is built from the tagged commit with fixed timestamps"
-            echo "and file modes, so rebuilding it from this tag reproduces the"
-            echo "published checksum:"
-            echo
-            echo '```'
-            echo "python scripts/build_release_archive.py"
-            echo "sha256sum -c dist/unifi_play.zip.sha256"
-            echo '```'
-          } >> release-notes.md
 
       - name: Create release
         env:

@@ -416,9 +416,17 @@ goes for anything playing: the report says `spotify`, never a track title.
 
 **Coming from 1.3.7 or earlier**, the minimum Home Assistant version has moved
 from 2024.1.0 to 2025.8.0. HACS will not offer the update on an older release,
-so update Home Assistant first. Nothing else changes: existing config entries
-keep working, entity IDs are unchanged, and a console entry keeps connecting
-without certificate verification exactly as it did before the option existed.
+so update Home Assistant first. Existing config entries keep working, entity
+IDs are unchanged, and a console entry keeps connecting without certificate
+verification exactly as it did before the option existed. **Restart** after
+updating — a config-entry reload does not load new Python.
+
+1.4.0 is a quality and correctness release on top of that floor: zone writes
+are transactional and held until readback, overlapping entries raise a repair
+instead of colliding unique IDs, console TLS verification is a choice on new
+entries, and a command against a disconnected speaker raises instead of
+reporting success. The full list is in the
+[v1.4.0 release notes](https://github.com/willbeeching/ha-unifiplay/releases/tag/v1.4.0).
 
 ## Troubleshooting
 
