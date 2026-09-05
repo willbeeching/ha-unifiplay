@@ -12,4 +12,4 @@ pytest-homeassistant-custom-component==0.13.269
 # A clean 3.13 install resolves pycares 5.0.1, where that symbol is gone, and
 # the minimum-lane import smoke test crashes before collection. 4.x is the
 # last series that still provides it.
-pycares>=4.0.0,<5
+pycares>=5.0.1,<6
