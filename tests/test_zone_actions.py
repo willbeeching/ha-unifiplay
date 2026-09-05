@@ -1135,18 +1135,59 @@ async def test_unconfirmed_write_history_is_deduplicated_and_bounded(
     for index in range(2, 20):
         writer.set_index(ZONE_ID, index)
     assert len(coordinator._outstanding_writes) == MAX_OUTSTANDING_WRITES
+    assert coordinator._outstanding_history_incomplete
     assert coordinator.groups_for_write()[ZONE_ID].group_index == 19
     assert coordinator.groups_for_write()[ZONE_ID].name == "Ground Floor"
 
 
-async def test_an_unconfirmed_write_expires_after_the_last_reread(
+async def test_an_evicted_write_echo_is_not_an_app_edit(
     hass: HomeAssistant,
     synced_zone: MockConfigEntry,
     amp: FakeDevice,
     port: FakeDevice,
     settle,
 ) -> None:
-    """A stale echo after the last ask is a failed write, not an in-flight one."""
+    """Overflow must not turn an earlier HA write into a Play-app edit.
+
+    Evicting the oldest signature reintroduced the lost-write bug: a
+    delayed echo of that document matched neither pending nor the
+    remaining history, so reconcile discarded the newest write.
+    """
+    writer = _writer(hass, synced_zone)
+    writer.rename(ZONE_ID, "Ground Floor")
+    for index in range(2, 20):
+        writer.set_index(ZONE_ID, index)
+
+    evicted = groups_body(name="Ground Floor")
+    amp.emit("groups", evicted)
+    port.emit("groups", evicted)
+    await settle(hass)
+
+    pending = entry_coordinator(hass, synced_zone).groups_for_write()
+    assert pending[ZONE_ID].name == "Ground Floor"
+    assert pending[ZONE_ID].group_index == 19
+
+    amp.clear()
+    writer.rename(ZONE_ID, "Upstairs")
+    written = _written_groups(amp)[0]
+    assert written["name"] == "Upstairs"
+    assert written["group_index"] == 19
+
+
+async def test_a_stale_reply_after_the_last_reread_can_still_confirm(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """One speaker answering the last ask with an older document is not failure.
+
+    The last re-read used to flip a flag before anyone replied. MQTT
+    responses arrive independently, so the first stale copy made
+    reconcile discard the pending write while the rest of the zone was
+    about to confirm it.
+    """
     writer = _writer(hass, synced_zone)
     writer.rename(ZONE_ID, "Ground Floor")
     writer.set_index(ZONE_ID, 7)
@@ -1157,8 +1198,59 @@ async def test_an_unconfirmed_write_expires_after_the_last_reread(
     await hass.async_block_till_done()
 
     amp.emit("groups", groups_body(name="Ground Floor"))
-    port.emit("groups", groups_body(name="Ground Floor"))
     await settle(hass)
+    assert (
+        entry_coordinator(hass, synced_zone).groups_for_write()[ZONE_ID].group_index
+        == 7
+    )
+
+    confirmed = groups_body(name="Ground Floor", group_index=7)
+    amp.emit("groups", confirmed)
+    port.emit("groups", confirmed)
+    await settle(hass)
+
+    amp.clear()
+    writer.rename(ZONE_ID, "Upstairs")
+    written = _written_groups(amp)[0]
+    assert written["name"] == "Upstairs"
+    assert written["group_index"] == 7
+
+
+async def test_an_unconfirmed_write_expires_after_the_last_reread(
+    hass: HomeAssistant,
+    synced_zone: MockConfigEntry,
+    amp: FakeDevice,
+    port: FakeDevice,
+    settle,
+) -> None:
+    """Speakers that stay on an older document are abandoned only after grace."""
+    writer = _writer(hass, synced_zone)
+    writer.rename(ZONE_ID, "Ground Floor")
+    writer.set_index(ZONE_ID, 7)
+    written_at = dt_util.utcnow()
+
+    async_fire_time_changed(
+        hass, written_at + timedelta(seconds=HOST_ELECTION_REREAD_DELAYS[-1])
+    )
+    await hass.async_block_till_done()
+
+    stale = groups_body(name="Ground Floor")
+    amp.emit("groups", stale)
+    port.emit("groups", stale)
+    await settle(hass)
+    assert (
+        entry_coordinator(hass, synced_zone).groups_for_write()[ZONE_ID].group_index
+        == 7
+    )
+
+    async_fire_time_changed(
+        hass,
+        written_at
+        + timedelta(
+            seconds=HOST_ELECTION_REREAD_DELAYS[-1] + PENDING_WRITE_EXPIRE_GRACE
+        ),
+    )
+    await hass.async_block_till_done()
 
     pending = entry_coordinator(hass, synced_zone).groups_for_write()
     assert pending[ZONE_ID].name == "Ground Floor"

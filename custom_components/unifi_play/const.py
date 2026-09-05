@@ -286,6 +286,8 @@ HOST_ELECTION_REREAD_DELAYS = (3, 10, 30)
 MAX_OUTSTANDING_WRITES = 8
 
 #: Seconds after the last host-election re-read to drop an unconfirmed
-#: write if the speakers have not reported it. The re-read series
-#: restarts on every mutation, so this only fires once writes stop.
+#: write. The last ask itself is not the deadline: MQTT replies arrive
+#: independently, so one speaker can still be serving an older document
+#: while the others confirm. The re-read series restarts on every
+#: mutation, so this only fires once writes stop.
 PENDING_WRITE_EXPIRE_GRACE = 5

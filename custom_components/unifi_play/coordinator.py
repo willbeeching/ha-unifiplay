@@ -522,13 +522,12 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # the newer write. Deduplicated and capped: a speaker that keeps
         # serving an old document, or goes silent, plus an automation
         # that keeps writing (and restarts the re-read series) would
-        # otherwise grow this without limit.
+        # otherwise grow this without limit. Once the cap evicts a
+        # signature, an echo of it is indistinguishable from an app
+        # edit, so `_outstanding_history_incomplete` keeps unknown
+        # readbacks as "maybe ours" until the confirmation deadline.
         self._outstanding_writes: list[dict[str, tuple[Any, ...]]] = []
-        # Set when the last host-election re-read is issued. A stale
-        # echo after that is a failed confirmation, not an in-flight
-        # write: the speakers were asked again and still have an older
-        # document.
-        self._final_reread_done = False
+        self._outstanding_history_incomplete = False
         self._zone_writer = ZoneWriter(self)
         # Cancel handles for the post-write zone re-reads, so shutdown can
         # take them down rather than leaving them to fire into a coordinator
@@ -1237,6 +1236,7 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # as if the app had overwritten us.
         if self._pending_groups is None:
             self._outstanding_writes = []
+            self._outstanding_history_incomplete = False
             self._remember_outstanding(
                 {gid: _zone_signature(gs) for gid, gs in self.groups.items()}
             )
@@ -1254,11 +1254,16 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         overflow = len(self._outstanding_writes) - MAX_OUTSTANDING_WRITES
         if overflow > 0:
             del self._outstanding_writes[:overflow]
+            # The evicted signature is still an HA write. A delayed echo
+            # of it must not look like a Play-app edit, or the newest
+            # pending document is discarded the way a missing baseline
+            # used to discard it.
+            self._outstanding_history_incomplete = True
 
     def _clear_pending_groups(self) -> None:
         self._pending_groups = None
         self._outstanding_writes = []
-        self._final_reread_done = False
+        self._outstanding_history_incomplete = False
 
     def _abandon_unconfirmed_write(self, reason: str) -> None:
         if self._pending_groups is None:
@@ -1288,14 +1293,19 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         is the report that would undo a rename or an index change if the
         next mutation rebuilt from it.
 
-        After the last confirmation re-read, a stale echo is a failed
-        write, not an in-flight one. Home Assistant and the Play app are
-        equal peers: if every copy we have agrees on a document that is
-        neither what we last submitted nor any earlier HA write still
-        outstanding, another peer wrote last and the snapshot would
-        replay the older HA value on the next mutation. Speakers that
-        still disagree are mid-edit; keep the snapshot until they
-        converge.
+        Home Assistant and the Play app are equal peers: if every copy
+        we have agrees on a document that is neither what we last
+        submitted nor any earlier HA write still outstanding, another
+        peer wrote last and the snapshot would replay the older HA
+        value on the next mutation. Speakers that still disagree are
+        mid-edit; keep the snapshot until they converge.
+
+        A stale echo after the last re-read is *issued* is not enough
+        to give up. MQTT replies arrive independently, so one speaker
+        can still be serving an older document while the rest of the
+        zone is about to confirm. The grace timer is the failure path.
+        The same caution applies once the history cap has evicted a
+        signature: an unknown document might be that evicted write.
         """
         if self._pending_groups is None:
             return
@@ -1307,12 +1317,8 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             self._clear_pending_groups()
             return
         if current_sigs in self._outstanding_writes:
-            if self._final_reread_done:
-                self._abandon_unconfirmed_write(
-                    "last re-read still reported an earlier document"
-                )
             return
-        if self._conflicted_zones:
+        if self._conflicted_zones or self._outstanding_history_incomplete:
             return
         self._clear_pending_groups()
 
@@ -1376,7 +1382,6 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
         # the host of the zone last written, so restarting it is both cheaper
         # and more correct than stacking two sets of timers.
         self._cancel_host_reread()
-        self._final_reread_done = False
 
         @callback
         def _reread(_now: datetime | None = None) -> None:
@@ -1384,29 +1389,21 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
                 if client is not None and client.is_connected:
                     client.request_groups()
 
-        @callback
-        def _final_reread(_now: datetime | None = None) -> None:
-            self._final_reread_done = True
-            _reread()
-
-        *early, last = HOST_ELECTION_REREAD_DELAYS
-        for delay in early:
+        for delay in HOST_ELECTION_REREAD_DELAYS:
             # Held so shutdown can cancel them. A re-read that fires thirty
             # seconds after the entry unloaded is a task outliving its owner,
             # which is how a reload ends up with two of everything.
             self._host_reread_cancels.append(
                 async_call_later(self.hass, delay, _reread)
             )
-        self._host_reread_cancels.append(
-            async_call_later(self.hass, last, _final_reread)
-        )
-        # The series restarts on every mutation, so this only runs once
-        # writes stop. Combined with the history cap it is the failure
-        # path for a speaker that never confirms.
+        # Do not abandon when this last ask is *sent*. One speaker can
+        # answer with an older document while the others are about to
+        # confirm the newest write. The grace timer is the point where
+        # every required speaker has had time to reply.
         self._host_reread_cancels.append(
             async_call_later(
                 self.hass,
-                last + PENDING_WRITE_EXPIRE_GRACE,
+                HOST_ELECTION_REREAD_DELAYS[-1] + PENDING_WRITE_EXPIRE_GRACE,
                 self._expire_unconfirmed_write,
             )
         )
