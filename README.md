@@ -430,6 +430,11 @@ entries, and a command against a disconnected speaker raises instead of
 reporting success. The full list is in the
 [v1.4.0 release notes](https://github.com/willbeeching/ha-unifiplay/releases/tag/v1.4.0).
 
+**Coming from 1.4.0**, 1.4.1 fixes a zone that forms on every speaker and then
+plays only on the host. Three fields the Play app sends were missing from the
+written `set_groups` payload, measured on five Audio Ports. See the
+[v1.4.1 release notes](https://github.com/willbeeching/ha-unifiplay/releases/tag/v1.4.1).
+
 ## Troubleshooting
 
 ### Direct connection
