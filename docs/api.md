@@ -392,6 +392,43 @@ a "device is up but does nothing" report:
 
 MAC is uppercase, no colons (e.g. `AABBCCDDEEFF`).
 
+#### A broker can carry another speaker's status topic
+
+**Verified on hardware, cause of the extra topic unverified.** Three UPL-PORTs
+(`UPL-DEVICE` topic root, firmware `v1.1.13`), direct mode, all three
+addresses entered as manual hosts. Two of them (speakers A and B)
+had been in a zone together; the zone had since been deleted.
+
+With v1.4.1, probing speaker A's address reported speaker B's MAC as the
+first `UPL-*/{MAC}/status` topic. Both addresses therefore minted speaker
+B's unique ID: speaker A never appeared, and the surviving device was
+redialled between the two addresses on every 5-minute poll
+(`Speaker B moved from 192.0.2.1 to 192.0.2.2; reconnecting`, then back).
+
+With the probe fix, its debug line on the same three speakers (names,
+addresses and MACs anonymised; A = 192.0.2.1, B = 192.0.2.2, C = 192.0.2.3):
+
+```
+MQTT probe of 192.0.2.1 saw status topics ['UPL-DEVICE/00000000000B', 'UPL-DEVICE/00000000000A']; info answered on UPL-DEVICE/00000000000A
+MQTT probe identified 192.0.2.1: Speaker A (UPL-DEVICE)
+MQTT probe of 192.0.2.2 saw status topics ['UPL-DEVICE/00000000000B']; info answered on UPL-DEVICE/00000000000B
+MQTT probe identified 192.0.2.2: Speaker B (UPL-DEVICE)
+MQTT probe of 192.0.2.3 saw status topics ['UPL-DEVICE/00000000000C']; info answered on UPL-DEVICE/00000000000C
+MQTT probe identified 192.0.2.3: Speaker C (UPL-DEVICE)
+```
+
+What this establishes:
+
+- A Port's broker can deliver **another speaker's** retained status topic
+  (here the former zone partner's) **before its own**.
+- A Port answers `info` on **its own** status topic, as the PowerAmp does.
+  The probe therefore takes the MAC from the topic of a non-retained `info`
+  answer, and with several topics and no answer declines to guess.
+- Result: three devices, all online, no address flapping.
+
+**Not verified:** why the broker holds the other speaker's topic, whether it
+ever goes away on its own, and whether it happens without a shared zone.
+
 ### Message Format ("Binme")
 
 All MQTT payloads use a custom binary framing:

@@ -20,7 +20,7 @@ from custom_components.unifi_play.discovery import (
     async_resolve_direct,
 )
 
-from .const import PORT_IP, PORT_MAC, amp_device
+from .const import PORT_IP, PORT_MAC, THIRD_IP, THIRD_MAC, amp_device
 from .fake_mqtt import FakeDevice, FakeMqttNetwork
 
 # ── UBNT discovery response parsing ───────────────────────────────────────
@@ -316,6 +316,74 @@ async def test_probe_without_an_info_answer_still_identifies(
     assert device["name"] == "UniFi Play"
 
 
+async def test_probe_identifies_the_speaker_that_answers_not_the_first_topic(
+    mqtt_network: FakeMqttNetwork,
+) -> None:
+    """A broker can hold another speaker's status topic ahead of its own.
+
+    Measured on UPL-PORT 1.1.13: one speaker's broker delivered another
+    speaker's retained topic first and answered ``info`` on its own. Taking
+    the first topic merged them into one device and hid the first speaker.
+    """
+    mqtt_network.add(
+        FakeDevice(
+            ip=PORT_IP,
+            mac=PORT_MAC,
+            name="Speaker A",
+            foreign_status=[("UPL-PORT", THIRD_MAC)],
+            auto_answer_info=True,
+        )
+    )
+    device = await async_probe_mqtt(PORT_IP, timeout=1)
+    assert device is not None
+    assert device["id"] == PORT_MAC
+    assert device["mac"] == PORT_MAC
+    assert device["name"] == "Speaker A"
+
+
+async def test_probe_does_not_take_a_retained_info_as_its_answer(
+    mqtt_network: FakeMqttNetwork,
+) -> None:
+    """A retained message predates the connection, so it answers nothing.
+
+    Unverified on hardware; it stages the one way a retained topic could
+    still carry a name and be mistaken for the reply.
+    """
+    mqtt_network.add(
+        FakeDevice(
+            ip=PORT_IP,
+            mac=PORT_MAC,
+            name="Speaker A",
+            foreign_retained_info=[("UPL-PORT", THIRD_MAC, "Speaker B")],
+            auto_answer_info=True,
+        )
+    )
+    device = await async_probe_mqtt(PORT_IP, timeout=1)
+    assert device is not None
+    assert (device["mac"], device["name"]) == (PORT_MAC, "Speaker A")
+
+
+async def test_probe_skips_a_host_it_cannot_tell_apart(
+    mqtt_network: FakeMqttNetwork, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Several speakers' topics and no answer: guessing is what merged them.
+
+    Returning nothing leaves the host for the next poll instead of minting
+    another speaker's unique ID for it.
+    """
+    mqtt_network.add(
+        FakeDevice(
+            ip=PORT_IP,
+            mac=PORT_MAC,
+            foreign_status=[("UPL-PORT", THIRD_MAC)],
+        )
+    )
+    with patch.object(discovery, "_MQTT_INFO_TIMEOUT", 0.05):
+        assert await async_probe_mqtt(PORT_IP, timeout=0.5) is None
+    assert "status topics for 2 speakers" in caplog.text
+    assert THIRD_MAC in caplog.text and PORT_MAC in caplog.text
+
+
 # ── Full direct resolution ────────────────────────────────────────────────
 
 
@@ -367,3 +435,46 @@ async def test_resolve_direct_skips_a_host_the_sweep_already_found(
 
     assert len(found) == 1
     assert port_fake.connect_attempts == 0
+
+
+async def test_resolve_direct_keeps_speakers_whose_brokers_hold_each_other(
+    mqtt_network: FakeMqttNetwork,
+) -> None:
+    """Two Ports, each broker holding the other's topic first.
+
+    Before the fix both resolved to the same MAC, so one device swallowed the
+    other and was redialled between the two addresses on every poll.
+    """
+    mqtt_network.add(
+        FakeDevice(
+            ip=PORT_IP,
+            mac=PORT_MAC,
+            name="Speaker A",
+            foreign_status=[("UPL-PORT", THIRD_MAC)],
+            auto_answer_info=True,
+        )
+    )
+    mqtt_network.add(
+        FakeDevice(
+            ip=THIRD_IP,
+            mac=THIRD_MAC,
+            name="Speaker B",
+            foreign_status=[("UPL-PORT", PORT_MAC)],
+            auto_answer_info=True,
+        )
+    )
+
+    async def _sweep(
+        manual_hosts: list[str] | None = None,
+        timeout: float = 0.0,
+        broadcast: bool = True,
+    ) -> list[dict[str, Any]]:
+        return []
+
+    with patch.object(discovery, "async_discover", new=_sweep):
+        found = await async_resolve_direct(manual_hosts=[PORT_IP, THIRD_IP])
+
+    assert sorted((d["ip"], d["mac"], d["name"]) for d in found) == [
+        (PORT_IP, PORT_MAC, "Speaker A"),
+        (THIRD_IP, THIRD_MAC, "Speaker B"),
+    ]

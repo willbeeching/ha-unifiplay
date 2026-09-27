@@ -137,6 +137,15 @@ class FakeDevice:
     #: ``info`` event in the middle of that is noise; the discovery probe
     #: needs it, so ``discovery_network`` turns it on.
     auto_answer_info: bool = False
+    #: Retained ``<platform>/<MAC>/status`` topics this broker holds for
+    #: *other* speakers, delivered before its own on a ``#`` subscription.
+    #: Stages what a UPL-PORT on 1.1.13 did: its broker delivered its former
+    #: zone partner's retained status topic before its own (docs/api.md).
+    foreign_status: list[tuple[str, str]] = field(default_factory=list)
+    #: Retained ``info`` events held for other speakers, as
+    #: ``(platform, mac, deviceName)``. Unverified on hardware; it stages the
+    #: case the probe must not mistake for an answer to its own request.
+    foreign_retained_info: list[tuple[str, str, str]] = field(default_factory=list)
 
     #: Every message the integration published to this device, in order.
     published: list[_Published] = field(default_factory=list)
@@ -327,8 +336,22 @@ class _FakeClient:
             # message; reading it is how the identification probe learns what
             # it is talking to without knowing anything but the IP. The
             # payload is not Binme and the probe never parses it - only the
-            # topic carries the answer.
-            self._deliver(f"{self._device.platform}/{self._device.mac}/status", b"\x00")
+            # topic carries the answer. Topics held for other speakers come
+            # first, which is the order that made the probe misidentify.
+            for platform, mac in self._device.foreign_status:
+                self._deliver(f"{platform}/{mac}/status", b"\x00", retain=True)
+            for platform, mac, name in self._device.foreign_retained_info:
+                header = {"id": "old", "type": "event", "timestamp": 0, "name": "info"}
+                self._deliver(
+                    f"{platform}/{mac}/status",
+                    encode_binme(header, {"deviceName": name}),
+                    retain=True,
+                )
+            self._deliver(
+                f"{self._device.platform}/{self._device.mac}/status",
+                b"\x00",
+                retain=True,
+            )
         return (0, 1)
 
     def publish(self, topic: str, payload: bytes, qos: int = 0, retain: bool = False):
@@ -423,10 +446,14 @@ class _FakeClient:
         with self._lock:
             self._pending.append(callback)
 
-    def _deliver(self, topic: str, payload: bytes) -> None:
+    def _deliver(self, topic: str, payload: bytes, retain: bool = False) -> None:
+        """Queue one message. ``retain`` marks a message the broker stored
+        before this connection, as paho reports a retained delivery; a live
+        publish forwarded to an existing subscription is not retained."""
+
         def _fire() -> None:
             if self.on_message is not None:
-                self.on_message(self, None, _FakeMessage(topic, payload))
+                self.on_message(self, None, _FakeMessage(topic, payload, retain))
 
         self._queue(_fire)
 
@@ -452,11 +479,11 @@ class _FakePublishInfo:
 class _FakeMessage:
     """Stand-in for ``paho.mqtt.client.MQTTMessage``."""
 
-    def __init__(self, topic: str, payload: bytes) -> None:
+    def __init__(self, topic: str, payload: bytes, retain: bool = False) -> None:
         self.topic = topic
         self.payload = payload
         self.qos = 0
-        self.retain = True
+        self.retain = retain
 
 
 class FakeMqttNetwork:

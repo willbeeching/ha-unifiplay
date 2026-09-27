@@ -9,9 +9,11 @@ Two probe mechanisms, tried in order:
    (UPL-PORT) have been reported not to (#5).
 2. **MQTT identification** — for a manually entered IP that ignores UDP:
    connect to the device's own broker (TCP 8883, the same mTLS channel used
-   for control), subscribe with a wildcard, and read the device's retained
-   ``UPL-*/<MAC>/status`` topic to learn its MAC and platform, then request
-   ``info`` for its name.
+   for control), subscribe with a wildcard, and request ``info``. The device
+   answers on its own ``UPL-*/<MAC>/status`` topic, which gives its MAC,
+   platform and name together. A broker can also hold retained status topics
+   for *other* speakers, so the first retained topic alone does not identify
+   the device (see ``_probe_mqtt_once``).
 
 This is what lets the integration work without the console's Apollo
 application, which Ubiquiti has not released for every console model.
@@ -214,6 +216,14 @@ def _probe_mqtt_once(
     would multiply the setup timeout by the number of generations bundled.
     """
     found: dict[str, Any] = {"ip": ip}
+    # Every UPL status topic seen, in arrival order, as (MAC, platform). The
+    # broker is the speaker itself, but its first status topic is not always
+    # its own: on UPL-PORT 1.1.13 a Port's broker delivered its former zone
+    # partner's retained status topic before its own, and answered info on
+    # its own (docs/api.md). Taking the first topic merged the two into one
+    # unique ID and redialled the result between both addresses every poll.
+    # Why the broker carries the other speaker's topic is unverified.
+    status_topics: list[tuple[str, str]] = []
     got_status = threading.Event()
     got_info = threading.Event()
     # Set on any CONNACK; accepted only when its reason code says so. Under
@@ -236,14 +246,12 @@ def _probe_mqtt_once(
 
     def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
         parts = msg.topic.split("/")
-        if (
-            len(parts) == 3
-            and parts[2] == "status"
-            and parts[0].startswith("UPL")
-            and not got_status.is_set()
-        ):
-            found["mac"] = parts[1].upper().replace(":", "")
-            found["platform"] = parts[0]
+        status_of = (
+            (parts[1].upper().replace(":", ""), parts[0])
+            if len(parts) == 3 and parts[2] == "status" and parts[0].startswith("UPL")
+            else None
+        )
+        if status_of is not None and not got_status.is_set():
             got_status.set()
             header = {
                 "id": str(uuid.uuid4()),
@@ -252,7 +260,8 @@ def _probe_mqtt_once(
                 "action": "info",
             }
             client.publish(action_topic, encode_binme(header, {}))
-            return
+        if status_of is not None and status_of not in status_topics:
+            status_topics.append(status_of)
         try:
             parsed = decode_binme(msg.payload)
         except Exception:  # noqa: BLE001 - unknown payloads are expected here
@@ -260,10 +269,21 @@ def _probe_mqtt_once(
         header = parsed.get("header", {})
         body = parsed.get("body", {})
         if (
-            header.get("name", header.get("action")) == "info"
+            status_of is not None
+            # A retained message was stored before this connection existed,
+            # so it cannot be the answer to our request - it may even be a
+            # retained info event of another speaker.
+            and not msg.retain
+            and header.get("name", header.get("action")) == "info"
             and isinstance(body, dict)
             and body.get("deviceName")
+            and not got_info.is_set()
         ):
+            # The answer arrives on the answering device's own status topic
+            # (docs/api.md, verified on UPL-AMP 1.0.41 and UPL-PORT 1.1.13),
+            # so this topic - not the first retained one - identifies the
+            # broker.
+            found["mac"], found["platform"] = status_of
             found["name"] = body["deviceName"]
             got_info.set()
 
@@ -303,11 +323,32 @@ def _probe_mqtt_once(
         client.loop_stop()
         client.disconnect()
 
+    _LOGGER.debug(
+        "MQTT probe of %s saw status topics %s; info answered on %s",
+        ip,
+        [f"{platform}/{mac}" for mac, platform in status_topics],
+        f"{found['platform']}/{found['mac']}" if "mac" in found else "none",
+    )
     if "mac" not in found:
-        _LOGGER.debug(
-            "MQTT probe connected to %s but saw no retained UPL status topic", ip
-        )
-        return None, False
+        if not status_topics:
+            _LOGGER.debug(
+                "MQTT probe connected to %s but saw no retained UPL status topic",
+                ip,
+            )
+            return None, False
+        if len(status_topics) > 1:
+            # No info answer to say which of these is the broker itself.
+            # Guessing is what merged two speakers into one device; leaving
+            # the host unidentified lets the next poll try again.
+            _LOGGER.warning(
+                "MQTT probe of %s saw status topics for %d speakers (%s) and "
+                "no info answer to tell which one it is; skipping it this pass",
+                ip,
+                len(status_topics),
+                ", ".join(mac for mac, _ in status_topics),
+            )
+            return None, False
+        found["mac"], found["platform"] = status_topics[0]
     _LOGGER.debug(
         "MQTT probe identified %s: %s (%s)",
         ip,
