@@ -563,6 +563,93 @@ async def test_an_unchanged_address_does_not_redial(
     assert amp.connect_attempts == 1
 
 
+# ── One id, two addresses ─────────────────────────────────────────────────
+
+#: A second address that reports the PowerAmp's id in the same pass. In #43
+#: this was an Audio Port whose broker offered another speaker's topic first.
+IMPOSTOR_IP = "192.168.1.150"
+
+
+async def test_one_id_at_two_addresses_at_setup_keeps_one_and_says_so(
+    hass: HomeAssistant,
+    direct_entry: MockConfigEntry,
+    udp_discovery,
+    mqtt_network: FakeMqttNetwork,
+    amp: FakeDevice,
+    settle,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The fault in #43, as it looked at setup.
+
+    Every host is probed in the first pass, so both addresses arrive in one
+    result. The second used to be read as the speaker moving: it was
+    redialled there, and the log said only that it had moved.
+    """
+    impostor = mqtt_network.add(
+        FakeDevice(ip=IMPOSTOR_IP, mac=AMP_MAC, platform="UPL-AMP", name="Elsewhere")
+    )
+    udp_discovery[:] = [device_dict(), device_dict(ip=IMPOSTOR_IP)]
+
+    direct_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(direct_entry.entry_id)
+    await settle(hass)
+
+    coordinator = entry_coordinator(hass, direct_entry)
+    assert list(coordinator.data) == [AMP_ID]
+    assert coordinator.data[AMP_ID].ip == amp.ip
+    assert amp.connect_attempts == 1
+    assert impostor.connect_attempts == 0
+    assert "reported at 2 addresses in one discovery pass" in caplog.text
+    assert amp.ip in caplog.text and IMPOSTOR_IP in caplog.text
+    assert "moved from" not in caplog.text
+
+
+async def test_a_known_speaker_keeps_its_address_when_another_claims_it(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    mqtt_network: FakeMqttNetwork,
+    discovered_devices,
+    amp: FakeDevice,
+    settle,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Order in the sweep must not decide it.
+
+    With the claimant listed first, first-wins would move a speaker that is
+    answering perfectly well at the address it already has.
+    """
+    impostor = mqtt_network.add(
+        FakeDevice(ip=IMPOSTOR_IP, mac=AMP_MAC, platform="UPL-AMP", name="Elsewhere")
+    )
+    discovered_devices.insert(0, device_dict(ip=IMPOSTOR_IP))
+
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+
+    assert entry_coordinator(hass, setup_direct).data[AMP_ID].ip == amp.ip
+    assert amp.connect_attempts == 1
+    assert impostor.connect_attempts == 0
+    assert f"Keeping {amp.ip}" in caplog.text
+
+
+async def test_the_same_address_twice_is_not_a_collision(
+    hass: HomeAssistant,
+    setup_direct: MockConfigEntry,
+    discovered_devices,
+    amp: FakeDevice,
+    settle,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A speaker answering the broadcast and a unicast probe is one speaker."""
+    discovered_devices.append(device_dict())
+
+    async_fire_time_changed(hass, dt_util.utcnow() + DISCOVERY_INTERVAL)
+    await settle(hass)
+
+    assert amp.connect_attempts == 1
+    assert "discovery pass" not in caplog.text
+
+
 # ── Device removal ────────────────────────────────────────────────────────
 
 
