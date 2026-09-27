@@ -596,6 +596,8 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
             except OSError as err:
                 raise UpdateFailed(f"Discovery socket error: {err}") from err
 
+        devices = self._drop_colliding_claims(devices)
+
         # Unique IDs are MAC-based, not per-entry. A console created while
         # Apollo listed nothing is a valid entry; the speakers it later
         # finds may already belong to a direct entry that was running the
@@ -670,6 +672,63 @@ class UnifiPlayCoordinator(DataUpdateCoordinator[dict[str, UnifiPlayDeviceState]
 
         self._record_discovery_absences(devices)
         return self._device_states
+
+    def _drop_colliding_claims(
+        self, devices: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Keep one address per device id, and say so when discovery offers two.
+
+        One speaker cannot be at two addresses in the same discovery pass, so
+        two entries with one id and different addresses mean at least one
+        address is a different speaker that has been misidentified. Before
+        this, the loop below read the second entry as the speaker moving: it
+        redialled the kept speaker at the other address, the speaker really
+        there never appeared, and the only trace was an info line saying the
+        first one had moved (#43).
+
+        Which address is right cannot be told from here. This keeps the one
+        the speaker already has, or else the first offered, and drops the
+        rest for this pass. It does not guard a claim that arrives on a later
+        poll: across polls that is indistinguishable from a genuine move, and
+        moves are deliberately trusted to discovery (see
+        test_a_speaker_that_moves_is_redialled).
+        """
+        addresses: dict[str, list[str]] = {}
+        for dev in devices:
+            ip = dev.get("ip")
+            if ip and ip not in addresses.setdefault(dev["id"], []):
+                addresses[dev["id"]].append(ip)
+
+        dropped: set[tuple[str, str]] = set()
+        for dev_id, ips in addresses.items():
+            if len(ips) < 2:
+                continue
+            known = self._device_states.get(dev_id)
+            keep = known.ip if known is not None and known.ip in ips else ips[0]
+            name = next(
+                (
+                    str(d["name"])
+                    for d in devices
+                    if d["id"] == dev_id and d.get("name")
+                ),
+                dev_id,
+            )
+            _LOGGER.warning(
+                "%s was reported at %d addresses in one discovery pass (%s). One "
+                "speaker cannot be at two addresses, so at least one of them is "
+                "a different speaker being misidentified. Keeping %s and "
+                "ignoring the rest this pass; enable debug logging for this "
+                "integration to see what each address reported (#43)",
+                name,
+                len(ips),
+                ", ".join(ips),
+                keep,
+            )
+            dropped.update((dev_id, ip) for ip in ips if ip != keep)
+
+        if not dropped:
+            return devices
+        return [d for d in devices if (d["id"], d.get("ip")) not in dropped]
 
     def _mqtt_is_held(self, device_id: str) -> bool:
         """True while a client is connected or still working on coming back."""
