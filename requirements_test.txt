@@ -6,10 +6,10 @@
 # pytest-homeassistant-custom-component, which pins it to match the Home
 # Assistant release under test, and a second pin here would fight it.
 black==26.5.1
-flake8==7.3.0
+flake8==7.4.1
 isort==9.0.1
 mypy==2.3.1
-ruff==0.16.7
+ruff==0.16.9
 
 # mypy needs the runtime dependency present to check calls into it. paho-mqtt
 # ships no py.typed marker, so this only stops mypy failing on the import;
