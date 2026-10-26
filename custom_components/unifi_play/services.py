@@ -13,7 +13,10 @@ import uuid
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-import voluptuous as vol
+# Home Assistant 2026.10 replaced voluptuous with probatio, an API-compatible
+# replacement, and types every schema argument against it. Aliased to vol so
+# the schemas below read as they always have.
+import probatio as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv

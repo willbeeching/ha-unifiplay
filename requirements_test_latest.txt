@@ -1,9 +1,13 @@
-# Latest stable Home Assistant lane.
+# The one Home Assistant lane: the current stable release, which is also the
+# supported floor.
 #
 # Pinned so a Home Assistant release cannot turn CI red on a day nobody
 # touched this repository; Dependabot proposes the bump and the bump is
 # reviewed like any other change. pytest-homeassistant-custom-component
 # 0.13.372 pins homeassistant==2026.10.1, which requires Python 3.14.2 or
 # later.
+#
+# Bumping this file moves the supported floor. hacs.json has to move with it
+# on the same branch; scripts/check_min_ha_version.py fails CI until it does.
 -r requirements_test.txt
 pytest-homeassistant-custom-component==0.13.372

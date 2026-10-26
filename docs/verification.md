@@ -6,20 +6,20 @@ UniFi Play, so a claim that something works is either backed by a test, by a
 static guard, or by a reading taken off real hardware. Nothing in this
 repository should assert protocol behaviour on any other basis.
 
-## The lanes
+## The lane
 
-Both run in CI on every push and pull request, and both have to be green.
+One Home Assistant release runs in CI on every push and pull request.
 
-| Lane | Home Assistant | Python | Requirements |
-|---|---|---|---|
-| minimum | 2025.8.0 | 3.13 | `requirements_test_min.txt` |
-| latest | 2026.10.1 | 3.14 | `requirements_test_latest.txt` |
+| Home Assistant | Python | Requirements |
+|---|---|---|
+| 2026.10.1 | 3.14 | `requirements_test_latest.txt` |
 
-The minimum is the floor declared in `hacs.json`.
-`scripts/check_min_ha_version.py --expect-min` fails the build if the two ever
-disagree, because a floor nobody runs against is not a floor.
+It is also the floor declared in `hacs.json`.
+`scripts/check_min_ha_version.py` fails the build if the two ever disagree,
+because a floor nobody runs against is not a floor. Up to 1.4.4 there were
+two lanes, a 2025.8.0 floor and the current stable release.
 
-Three bugs were only visible on one lane or the other:
+Three bugs were only visible on one of those two lanes:
 
 - An `asyncio.Event.set()` from paho's callback thread. Home Assistant's test
   harness runs the loop in debug mode, where `call_soon` from the wrong thread
@@ -36,12 +36,11 @@ Run all of it before tagging a release.
 
 | Check | Command |
 |---|---|
-| Tests, minimum lane | `pytest` |
-| Tests, latest lane | `pytest` against `requirements_test_latest.txt` |
+| Tests | `pytest` against `requirements_test_latest.txt` |
 | Per-module coverage | `pytest --cov --cov-report=json:coverage.json && python scripts/check_coverage.py coverage.json` |
 | Strict typing | `mypy custom_components/unifi_play` |
 | Formatting and lint | `black --check .`, `isort --check-only .`, `ruff check .`, `flake8` |
-| Import smoke, both lanes | `python scripts/check_min_ha_version.py --expect-min` |
+| Import smoke and floor | `python scripts/check_min_ha_version.py` |
 | MQTT client calls resolve | `python scripts/check_mqtt_client_calls.py` |
 | Certificate-generation fallback | `python scripts/check_mqtt_cert_generations.py` |
 | Every `tls_set` uses the bundled pairs | `python scripts/check_cert_generation_users.py` |
@@ -80,7 +79,7 @@ were each "disproved" once before being confirmed on cleared hardware.
 
 ## What CI proves, and what it does not
 
-CI (both lanes, plus the static guards) proves:
+CI (the test lane, plus the static guards) proves:
 
 - Setup, reload, unload, reauth and reconfigure against the three test seams.
 - Zone mutations serialise against the pending snapshot, including a delayed

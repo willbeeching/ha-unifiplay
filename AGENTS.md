@@ -55,7 +55,7 @@ published and ignored" is what stops the next person re-deriving it.
 ## Commands
 
 ```bash
-pip install -r requirements_test_min.txt       # minimum lane: HA 2025.8.0
+pip install -r requirements_test_latest.txt    # the one lane: current stable HA
 pytest                                          # the suite
 pytest --cov --cov-report=json:coverage.json && python scripts/check_coverage.py coverage.json
 mypy custom_components/unifi_play                # strict, against real HA types
@@ -67,7 +67,7 @@ pre-commit run --all-files --hook-stage pre-push     # flake8, guards, coverage
 
 python scripts/check_mqtt_client_calls.py       # the guard on its own
 python scripts/check_mqtt_cert_generations.py   # cert-generation fallback, paho stubbed
-python scripts/check_min_ha_version.py --expect-min   # import smoke + floor check
+python scripts/check_min_ha_version.py          # import smoke + floor check
 python scripts/check_workflow_injection.py      # no ${{ }} reaches a shell script
 python scripts/check_quality_scale.py           # tracker matches the pinned official list
 python scripts/check_quality_scale.py --check-upstream  # pin vs live hassfest (scheduled)
@@ -87,16 +87,14 @@ hassfest `ALL_RULES` and fails when Home Assistant has added or removed
 a rule. The manifest does not claim a tier; this is a self-assessment
 for a custom integration.
 
-Two supported lanes, both run in CI and both must stay green:
-
-| Lane | Home Assistant | Python | Requirements |
-|---|---|---|---|
-| minimum | 2025.8.0 (the floor in `hacs.json`) | 3.13 | `requirements_test_min.txt` |
-| latest | whatever `requirements_test_latest.txt` pins | 3.14 | `requirements_test_latest.txt` |
-
-Changing the minimum means changing `hacs.json`, the README and
-`requirements_test_min.txt` together — `scripts/check_min_ha_version.py`
-fails the build if the declared floor and the tested release disagree.
+One supported Home Assistant release, run in CI: the current stable one,
+pinned by `requirements_test_latest.txt` on Python 3.14. The floor in
+`hacs.json` is kept equal to it, so the integration requires the release it
+was tested against and nothing older. A Dependabot bump of
+`pytest-homeassistant-custom-component` therefore needs `hacs.json` moved on
+the same PR; `scripts/check_min_ha_version.py` fails the build until it is.
+Code paths for older Home Assistant releases are deleted when the floor
+passes them, not kept.
 
 ## Testing
 

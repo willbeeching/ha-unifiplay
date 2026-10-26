@@ -21,11 +21,9 @@ concurrency:
 # write into every job that resolves it. The comment after each SHA records
 # which release it was, so Dependabot's bumps stay reviewable.
 env:
-  # The minimum lane. Kept here so the floor is stated once and every job
-  # that needs it reads the same value; scripts/check_min_ha_version.py
-  # asserts it against hacs.json.
-  MIN_PYTHON: "3.13"
-  LATEST_PYTHON: "3.14"
+  # The Python the pinned Home Assistant release requires. Stated once so
+  # every job reads the same value.
+  PYTHON: "3.14"
 
 jobs:
   lint:
@@ -38,7 +36,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ env.MIN_PYTHON }}
+          python-version: ${{ env.PYTHON }}
           cache: pip
           cache-dependency-path: requirements_test*.txt
 
@@ -84,7 +82,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ env.MIN_PYTHON }}
+          python-version: ${{ env.PYTHON }}
 
       # flake8 catches undefined names, never a missing attribute on an object
       # it cannot type - which is how v1.2.0 shipped calling two methods that
@@ -111,24 +109,8 @@ jobs:
         run: python scripts/check_cert_generation_users.py
 
   test:
-    name: Tests (HA ${{ matrix.lane }})
+    name: Tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # The floor declared in hacs.json. A minimum nobody runs is not a
-          # minimum, so this lane is not optional and not allowed to fail.
-          - lane: minimum
-            python: "3.13"
-            requirements: requirements_test_min.txt
-            coverage: true
-          # The newest stable release. Catches a deprecation before a user's
-          # monthly update does.
-          - lane: latest
-            python: "3.14"
-            requirements: requirements_test_latest.txt
-            coverage: false
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -136,33 +118,31 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python }}
+          python-version: ${{ env.PYTHON }}
           cache: pip
-          cache-dependency-path: ${{ matrix.requirements }}
+          cache-dependency-path: requirements_test*.txt
 
+      # One lane: the floor declared in hacs.json is the current stable
+      # release, so the release under test is both the newest and the oldest
+      # this integration supports.
       - name: Install dependencies
-        run: pip install -r ${{ matrix.requirements }}
+        run: pip install -r requirements_test_latest.txt
 
       - name: Run tests
         run: pytest --cov --cov-report=term-missing --cov-report=json:coverage.json
 
-      # Only on the minimum lane: the two lanes cover slightly different
-      # branches (a deprecation shim taken on one and not the other), and
-      # gating on whichever ran last would make the threshold depend on
-      # scheduling.
       # 95% for every module and 100% for the config flow, enforced per
       # module rather than as one repository-wide number: 95% overall is
       # comfortably reachable with the largest and most branch-heavy file
       # barely touched.
       - name: Per-module coverage gate
-        if: matrix.coverage
         run: python scripts/check_coverage.py coverage.json
 
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: coverage-${{ matrix.lane }}
+          name: coverage
           path: coverage.json
           if-no-files-found: ignore
 
@@ -176,7 +156,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ env.MIN_PYTHON }}
+          python-version: ${{ env.PYTHON }}
           cache: pip
           cache-dependency-path: requirements_test*.txt
 
@@ -184,26 +164,14 @@ jobs:
       # catch a signature that changed under us, and a stub tracks whatever
       # was true when it was written.
       - name: Install dependencies
-        run: pip install -r requirements_test_min.txt
+        run: pip install -r requirements_test_latest.txt
 
       - name: mypy
         run: mypy custom_components/unifi_play
 
   import-smoke:
-    name: Import smoke (HA ${{ matrix.lane }})
+    name: Import smoke
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - lane: minimum
-            python: "3.13"
-            requirements: requirements_test_min.txt
-            expect_min: "--expect-min"
-          - lane: latest
-            python: "3.14"
-            requirements: requirements_test_latest.txt
-            expect_min: ""
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -211,17 +179,18 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python }}
+          python-version: ${{ env.PYTHON }}
           cache: pip
-          cache-dependency-path: ${{ matrix.requirements }}
+          cache-dependency-path: requirements_test*.txt
 
       - name: Install dependencies
-        run: pip install -r ${{ matrix.requirements }}
+        run: pip install -r requirements_test_latest.txt
 
-      # Imports every module and, on the minimum lane, asserts the floor
-      # declared in hacs.json is the release actually being tested.
+      # Imports every module and asserts the floor declared in hacs.json is
+      # the release actually being tested. A Dependabot bump to
+      # requirements_test_latest.txt fails here until hacs.json moves with it.
       - name: Import and version consistency
-        run: python scripts/check_min_ha_version.py ${{ matrix.expect_min }}
+        run: python scripts/check_min_ha_version.py
 
   hacs:
     name: HACS validation
