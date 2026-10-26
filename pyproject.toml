@@ -7,10 +7,13 @@ forced_separate = ["tests"]
 # which buries the actual change under noise.
 
 [tool.black]
+# Not py314, although that is the floor: on 3.14 black drops the parentheses
+# from multi-exception except clauses (PEP 758), rewriting files no change
+# touched.
 target-version = ["py313"]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 88
 src = ["custom_components", "tests"]
 
@@ -82,8 +85,8 @@ filterwarnings = [
     "ignore:Inheritance class .* from ClientSession is discouraged:DeprecationWarning",
     "ignore:Accessing the 'model_fields' attribute:DeprecationWarning",
     # Raised by aiohttp inside Home Assistant's own http component, which
-    # still writes app["hass"]. Nothing in this repository can fix it, and it
-    # only appears on the older releases in the minimum lane.
+    # still writes app["hass"] as of 2026.10.1. Nothing in this repository
+    # can fix it.
     "ignore::aiohttp.web_exceptions.NotAppKeyWarning",
 ]
 
@@ -100,7 +103,7 @@ exclude_also = [
 show_missing = true
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 plugins = []
 follow_imports = "normal"
 local_partial_types = true

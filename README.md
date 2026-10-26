@@ -30,13 +30,14 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 
 | | Version |
 |---|---|
-| Home Assistant | 2025.8.0 or newer |
-| Python | 3.13 (whatever your Home Assistant runs) |
+| Home Assistant | The current stable release (2026.10.1 or newer today) |
+| Python | 3.14 (whatever your Home Assistant runs) |
 | Network | UDP 10001 and TCP 8883 from Home Assistant to each speaker |
 
-Every release is tested against 2025.8.0 and against the current stable Home
-Assistant, on both Python 3.13 and 3.14. The floor moves only in a release
-that says so in its notes.
+The minimum follows Home Assistant's stable release: each release of this
+integration is tested against the current stable Home Assistant and requires
+it. HACS will not offer an update until Home Assistant is on that version, so
+update Home Assistant first. Each release's notes state its minimum.
 
 The integration has two connection modes, chosen at setup:
 
@@ -540,11 +541,11 @@ nothing in the pipeline could see it: flake8 finds undefined *names*, never a mi
 Formatting deliberately runs at commit rather than push. Rewriting files at push time would be
 useless — the commits being pushed already contain the unformatted code.
 
-Python 3.13 is needed, matching CI and Home Assistant itself. The same checks run in CI, so hooks
+Python 3.14 is needed, matching CI and Home Assistant itself. The same checks run in CI, so hooks
 are a convenience rather than the gate.
 
-Two lanes are tested, the 2025.8.0 floor and the current stable release, and both have to stay
-green. [`docs/verification.md`](docs/verification.md) has the full matrix and the hardware smoke
+One Home Assistant release is tested: the current stable one, which is also the supported
+minimum. [`docs/verification.md`](docs/verification.md) has the full matrix and the hardware smoke
 test to run before a release: the suite can prove a value was published, never that the speaker
 did anything with it.
 

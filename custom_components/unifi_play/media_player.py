@@ -41,7 +41,7 @@ from .coordinator import (
     UnifiPlayGroupState,
 )
 from .entity import UnifiPlayEntity, async_setup_platform_entities
-from .helpers import mac_normalise, via_device_link
+from .helpers import mac_normalise, parent_device_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,10 +99,8 @@ async def async_setup_entry(
         # Built by walking the entry's own devices rather than by looking each
         # zone identifier up: device_registry.async_get_device is deprecated
         # from Home Assistant 2026.9 (identifiers are no longer unique across
-        # config entries) and its replacement does not exist on the supported
-        # floor, so neither call is usable across the range this integration
-        # claims. Walking the entry's devices works on both, and is what the
-        # orphan sweep below needed anyway.
+        # config entries), and while the 2025.8 floor stood its replacement did
+        # not exist. The walk is also what the orphan sweep below needs.
         entry_devices = dr.async_entries_for_config_entry(device_reg, entry.entry_id)
         zone_device_ids: dict[str, str] = {}
         for dev_entry in entry_devices:
@@ -506,14 +504,11 @@ class UnifiPlayZonePlayer(CoordinatorEntity[UnifiPlayCoordinator], MediaPlayerEn
         )
         entry = self.coordinator.config_entry
         if gs.host_mac and entry is not None:
-            # via_device_id on 2026.9; via_device on the 2025.8 floor.
-            # The helper picks; neither key is in both TypedDicts.
-            for key, value in via_device_link(
-                self.hass,
-                entry.entry_id,
-                (DOMAIN, mac_normalise(gs.host_mac)),
-            ).items():
-                info[key] = value  # type: ignore[literal-required]
+            parent = parent_device_id(
+                self.hass, entry.entry_id, (DOMAIN, mac_normalise(gs.host_mac))
+            )
+            if parent is not None:
+                info["via_device_id"] = parent
         return info
 
     @property

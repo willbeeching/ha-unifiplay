@@ -9,7 +9,6 @@ the actions would have refused.
 from __future__ import annotations
 
 import logging
-from unittest.mock import patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -23,9 +22,9 @@ from custom_components.unifi_play.helpers import (
     entries_covering_macs,
     entry_covering_macs,
     mac_normalise,
+    parent_device_id,
     resolve_device,
     strip_firmware_keys,
-    via_device_link,
 )
 
 from .const import AMP_MAC
@@ -165,33 +164,10 @@ def test_an_unrecognised_key_is_dropped_and_recorded(
     assert "signal" in caplog.text
 
 
-def test_via_device_link_uses_whichever_form_this_ha_understands(
+def test_parent_device_id_is_the_host_registry_id(
     hass: HomeAssistant, setup_direct: MockConfigEntry
 ) -> None:
-    """2026.9 has via_device_id; the 2025.8 floor still uses via_device."""
-    identifier = (DOMAIN, AMP_MAC)
-    link = via_device_link(hass, setup_direct.entry_id, identifier)
-    if "via_device_id" in link:
-        host = next(
-            device
-            for device in dr.async_entries_for_config_entry(
-                dr.async_get(hass), setup_direct.entry_id
-            )
-            if identifier in device.identifiers
-        )
-        assert link == {"via_device_id": host.id}
-    else:
-        assert link == {"via_device": identifier}
-
-
-def test_via_device_link_uses_the_registry_id_when_lookup_exists(
-    hass: HomeAssistant, setup_direct: MockConfigEntry
-) -> None:
-    """The 2026.9 helper is absent on the floor, so both lanes stub it.
-
-    Leaving this branch to the latest lane alone dropped helpers.py
-    below 95% on the minimum coverage gate.
-    """
+    """2026.9 links a child through the parent's registry id."""
     identifier = (DOMAIN, AMP_MAC)
     host = next(
         device
@@ -200,34 +176,13 @@ def test_via_device_link_uses_the_registry_id_when_lookup_exists(
         )
         if identifier in device.identifiers
     )
-
-    def _lookup(_hass: HomeAssistant, ident: tuple[str, str], **_kwargs: object) -> str:
-        assert ident == identifier
-        return host.id
-
-    with patch(
-        "custom_components.unifi_play.helpers.dr.async_get_device_id_by_identifier",
-        _lookup,
-        create=True,
-    ):
-        assert via_device_link(hass, setup_direct.entry_id, identifier) == {
-            "via_device_id": host.id
-        }
+    assert parent_device_id(hass, setup_direct.entry_id, identifier) == host.id
 
 
-def test_via_device_link_is_empty_when_the_lookup_raises(
+def test_parent_device_id_is_none_for_an_unknown_host(
     hass: HomeAssistant, setup_direct: MockConfigEntry
 ) -> None:
     """The zone still exists; it just has no parent until the host is."""
-
-    def _raise(*_args: object, **_kwargs: object) -> str:
-        raise ValueError("unknown identifier")
-
-    with patch(
-        "custom_components.unifi_play.helpers.dr.async_get_device_id_by_identifier",
-        _raise,
-        create=True,
-    ):
-        assert (
-            via_device_link(hass, setup_direct.entry_id, (DOMAIN, "DEADBEEF0000")) == {}
-        )
+    assert (
+        parent_device_id(hass, setup_direct.entry_id, (DOMAIN, "DEADBEEF0000")) is None
+    )
