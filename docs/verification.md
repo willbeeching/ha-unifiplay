@@ -13,7 +13,7 @@ Both run in CI on every push and pull request, and both have to be green.
 | Lane | Home Assistant | Python | Requirements |
 |---|---|---|---|
 | minimum | 2025.8.0 | 3.13 | `requirements_test_min.txt` |
-| latest | 2026.9.0 | 3.14 | `requirements_test_latest.txt` |
+| latest | 2026.10.1 | 3.14 | `requirements_test_latest.txt` |
 
 The minimum is the floor declared in `hacs.json`.
 `scripts/check_min_ha_version.py --expect-min` fails the build if the two ever

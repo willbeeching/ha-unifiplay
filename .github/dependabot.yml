@@ -33,6 +33,13 @@ updates:
       prefix: "deps"
     labels:
       - dependencies
+    ignore:
+      # Pinned below 5 in requirements_test_min.txt only, because Home
+      # Assistant 2025.8.0's aiodns still references a symbol pycares 5
+      # removed. The pin moves when the supported floor does, as a
+      # deliberate change; every bump Dependabot proposes here breaks the
+      # minimum lane on import (#53, #60).
+      - dependency-name: pycares
     groups:
       # One PR for the linters: they move together and a five-PR week of
       # formatter bumps is noise nobody reads.
