@@ -1,35 +1,45 @@
 name: Notify HA issues
 
-# Forwards new issues, and comments on issues, to Will's Grok HA watcher.
-# GROK_WEBHOOK_URL and GROK_WEBHOOK_KEY are repository secrets; this file
-# does not contain their values.
+# Forwards new issues, comments on issues, and newly opened pull requests
+# to Will's Grok HA watcher. GROK_WEBHOOK_URL and GROK_WEBHOOK_KEY are
+# repository secrets; this file does not contain their values.
 #
 # issue_comment also fires for comments on pull requests. Those carry
-# issue.pull_request, and the watcher follows the issue tracker, so they
-# are skipped. This job never writes back to GitHub, so it cannot retrigger
-# itself.
+# issue.pull_request and are skipped. A pull request being opened is a
+# separate event and is forwarded on its own. This job never writes back
+# to GitHub, so it cannot retrigger itself.
+#
+# The trigger is pull_request, not pull_request_target. A fork's opened
+# PR does not receive repository secrets, so that run fails the POST
+# instead of holding the webhook key. Same-repo PRs do notify. The job
+# does not check out the PR.
 
 on:
   issues:
     types: [opened]
   issue_comment:
     types: [created]
+  pull_request:
+    types: [opened]
 
-# Anyone who can open an issue can run this job. It only POSTs to the
-# webhook, so it holds no token that can write to the repository.
+# Anyone who can open an issue can run this job, and so can anyone who
+# opens a pull request in this repository. It only POSTs to the webhook,
+# so it holds no token that can write here.
 permissions: {}
 
 jobs:
   notify:
     runs-on: ubuntu-latest
-    if: github.event.issue.pull_request == null
+    # Skip comments on a pull request. pull_request opened has no issue
+    # object; name it so that absence cannot be read as "skip".
+    if: github.event_name == 'pull_request' || github.event.issue.pull_request == null
     steps:
       - name: Post the event to the HA watcher
         env:
           # Bound here, not pasted into the script. A ${{ }} inside run: is
-          # spliced in before bash parses the line, and an issue title or
-          # comment body is caller-controlled text. The injection guard
-          # rejects that shape.
+          # spliced in before bash parses the line, and an issue title,
+          # comment body, or PR title is caller-controlled text. The
+          # injection guard rejects that shape.
           WEBHOOK_URL: ${{ secrets.GROK_WEBHOOK_URL }}
           WEBHOOK_KEY: ${{ secrets.GROK_WEBHOOK_KEY }}
           GITHUB_EVENT: ${{ github.event_name }}
@@ -42,41 +52,80 @@ jobs:
           ACTOR: ${{ github.actor }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_HTML_URL: ${{ github.event.comment.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HTML_URL: ${{ github.event.pull_request.html_url }}
+          PR_STATE: ${{ github.event.pull_request.state }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -euo pipefail
 
           # jq and curl ship on the runner image, so this needs no checkout.
           # A comment may be 65536 characters; the watcher gets the first
           # 2000, which is enough to see what was said.
+          # Numbers stay strings until the branch that uses them. A
+          # pull_request event has no issue number, and --argjson rejects
+          # the empty string.
+          # draft is GitHub's own boolean. state stays open on a newly
+          # opened draft; the two are not the same field.
           jq -nc \
             --arg github_event "$GITHUB_EVENT" \
             --arg action "$ACTION" \
             --arg repository "$REPOSITORY" \
-            --argjson number "$ISSUE_NUMBER" \
+            --arg number "$ISSUE_NUMBER" \
             --arg title "$ISSUE_TITLE" \
             --arg html_url "$ISSUE_HTML_URL" \
             --arg state "$ISSUE_STATE" \
             --arg actor "$ACTOR" \
             --arg comment_body "$COMMENT_BODY" \
             --arg comment_html_url "$COMMENT_HTML_URL" \
-            '{
-              github_event: $github_event,
-              action: $action,
-              repository: {full_name: $repository},
-              issue: {
-                number: $number,
-                title: $title,
-                html_url: $html_url,
-                state: $state
-              },
-              actor: {login: $actor}
-            } + (
-              if $github_event == "issue_comment" then
-                {comment: {body: $comment_body[0:2000], html_url: $comment_html_url}}
-              else
-                {}
-              end
-            )' > /tmp/ha-webhook.json
+            --arg pr_number "$PR_NUMBER" \
+            --arg pr_title "$PR_TITLE" \
+            --arg pr_html_url "$PR_HTML_URL" \
+            --arg pr_state "$PR_STATE" \
+            --arg pr_draft "$PR_DRAFT" \
+            'if $github_event == "pull_request" then
+              {
+                github_event: $github_event,
+                action: $action,
+                repository: {full_name: $repository},
+                pull_request: {
+                  number: ($pr_number | tonumber),
+                  title: $pr_title,
+                  html_url: $pr_html_url,
+                  state: $pr_state,
+                  draft: ($pr_draft == "true")
+                },
+                actor: {login: $actor}
+              }
+            elif $github_event == "issue_comment" then
+              {
+                github_event: $github_event,
+                action: $action,
+                repository: {full_name: $repository},
+                issue: {
+                  number: ($number | tonumber),
+                  title: $title,
+                  html_url: $html_url,
+                  state: $state
+                },
+                actor: {login: $actor},
+                comment: {body: $comment_body[0:2000], html_url: $comment_html_url}
+              }
+            else
+              {
+                github_event: $github_event,
+                action: $action,
+                repository: {full_name: $repository},
+                issue: {
+                  number: ($number | tonumber),
+                  title: $title,
+                  html_url: $html_url,
+                  state: $state
+                },
+                actor: {login: $actor}
+              }
+            end' > /tmp/ha-webhook.json
 
           # printf %s writes the key verbatim. curl reads it from a file so
           # the token is not a process argument and is never echoed.
