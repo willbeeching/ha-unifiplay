@@ -1,0 +1,104 @@
+name: Notify HA issues
+
+# Forwards new issues, and comments on issues, to Will's Grok HA watcher.
+# GROK_WEBHOOK_URL and GROK_WEBHOOK_KEY are repository secrets; this file
+# does not contain their values.
+#
+# issue_comment also fires for comments on pull requests. Those carry
+# issue.pull_request, and the watcher follows the issue tracker, so they
+# are skipped. This job never writes back to GitHub, so it cannot retrigger
+# itself.
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+# Anyone who can open an issue can run this job. It only POSTs to the
+# webhook, so it holds no token that can write to the repository.
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: github.event.issue.pull_request == null
+    steps:
+      - name: Post the event to the HA watcher
+        env:
+          # Bound here, not pasted into the script. A ${{ }} inside run: is
+          # spliced in before bash parses the line, and an issue title or
+          # comment body is caller-controlled text. The injection guard
+          # rejects that shape.
+          WEBHOOK_URL: ${{ secrets.GROK_WEBHOOK_URL }}
+          WEBHOOK_KEY: ${{ secrets.GROK_WEBHOOK_KEY }}
+          GITHUB_EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_HTML_URL: ${{ github.event.issue.html_url }}
+          ISSUE_STATE: ${{ github.event.issue.state }}
+          ACTOR: ${{ github.actor }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_HTML_URL: ${{ github.event.comment.html_url }}
+        run: |
+          set -euo pipefail
+
+          # jq and curl ship on the runner image, so this needs no checkout.
+          # A comment may be 65536 characters; the watcher gets the first
+          # 2000, which is enough to see what was said.
+          jq -nc \
+            --arg github_event "$GITHUB_EVENT" \
+            --arg action "$ACTION" \
+            --arg repository "$REPOSITORY" \
+            --argjson number "$ISSUE_NUMBER" \
+            --arg title "$ISSUE_TITLE" \
+            --arg html_url "$ISSUE_HTML_URL" \
+            --arg state "$ISSUE_STATE" \
+            --arg actor "$ACTOR" \
+            --arg comment_body "$COMMENT_BODY" \
+            --arg comment_html_url "$COMMENT_HTML_URL" \
+            '{
+              github_event: $github_event,
+              action: $action,
+              repository: {full_name: $repository},
+              issue: {
+                number: $number,
+                title: $title,
+                html_url: $html_url,
+                state: $state
+              },
+              actor: {login: $actor}
+            } + (
+              if $github_event == "issue_comment" then
+                {comment: {body: $comment_body[0:2000], html_url: $comment_html_url}}
+              else
+                {}
+              end
+            )' > /tmp/ha-webhook.json
+
+          # printf %s writes the key verbatim. curl reads it from a file so
+          # the token is not a process argument and is never echoed.
+          umask 077
+          printf 'Authorization: Bearer %s\n' "$WEBHOOK_KEY" > /tmp/ha-webhook.auth
+
+          # No --location. A redirect is not status 200, and following it
+          # would send the bearer token to whatever host came back.
+          status="$(
+            curl --silent \
+              --output /tmp/ha-webhook-response \
+              --write-out '%{http_code}' \
+              --max-time 30 \
+              --request POST \
+              --header @/tmp/ha-webhook.auth \
+              --header 'Content-Type: application/json' \
+              --data-binary @/tmp/ha-webhook.json \
+              --url "$WEBHOOK_URL" \
+              2>/tmp/ha-webhook-curl.err
+          )" || status="000"
+
+          if [ "$status" != "200" ]; then
+            echo "::error::HA watcher webhook returned HTTP ${status}"
+            exit 1
+          fi
