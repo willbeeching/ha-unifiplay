@@ -97,25 +97,22 @@ def mac_normalise(mac: str) -> str:
     return mac.upper().replace(":", "")
 
 
-def via_device_link(
+def parent_device_id(
     hass: HomeAssistant, entry_id: str, identifier: tuple[str, str]
-) -> dict[str, Any]:
-    """The DeviceInfo key this Home Assistant version uses for a parent device.
+) -> str | None:
+    """The registry id of a parent device, for ``DeviceInfo.via_device_id``.
 
     2026.9 deprecated ``via_device`` (the identifier tuple) in favour of
-    ``via_device_id`` (the registry id) and logs the old form until 2027.8.
-    The helper that resolves the latter does not exist on the 2025.8 floor,
-    so this returns whichever form the running release understands. An
-    unknown identifier yields an empty dict: the zone still exists, it just
-    has no parent until the host speaker is registered.
+    ``via_device_id`` (the registry id). An unknown identifier yields None:
+    the zone still exists, it just has no parent until the host speaker is
+    registered.
     """
-    lookup = getattr(dr, "async_get_device_id_by_identifier", None)
-    if lookup is not None:
-        try:
-            return {"via_device_id": lookup(hass, identifier, config_entry_id=entry_id)}
-        except ValueError:
-            return {}
-    return {"via_device": identifier}
+    try:
+        return dr.async_get_device_id_by_identifier(
+            hass, identifier, config_entry_id=entry_id
+        )
+    except ValueError:
+        return None
 
 
 def resolve_device(

@@ -6,7 +6,10 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
-import voluptuous as vol
+# Home Assistant 2026.10 replaced voluptuous with probatio, an API-compatible
+# replacement, and types every schema argument against it. Aliased to vol so
+# the schemas below read as they always have.
+import probatio as vol
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,

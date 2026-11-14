@@ -22,12 +22,11 @@ from .fake_mqtt import FakeDevice, FakeMqttNetwork
 def _device_by_identifier(
     registry: dr.DeviceRegistry, entry_id: str, identifier: tuple[str, str]
 ):
-    """Find one of an entry's devices by identifier, on any supported release.
+    """Find one of an entry's devices by identifier.
 
-    ``async_get_device`` is deprecated from Home Assistant 2026.9 and its
-    replacement does not exist on the 2025.8 floor, and iterating
-    ``registry.devices`` yields ids on one release and entries on the other.
-    ``async_entries_for_config_entry`` means the same thing on both.
+    ``async_get_device`` is deprecated from Home Assistant 2026.9.
+    ``async_entries_for_config_entry`` is scoped to the entry, which is what
+    these tests mean.
     """
     for device in dr.async_entries_for_config_entry(registry, entry_id):
         if identifier in device.identifiers:

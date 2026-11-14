@@ -9,15 +9,16 @@ Two jobs, deliberately in one script so they cannot drift apart:
    up in someone's Home Assistant.
 
 2. **Check the declared floor against the release under test.** ``hacs.json``
-   tells HACS the oldest Home Assistant this integration supports. If the
-   minimum CI lane runs a *different* release, the number is decorative: the
-   floor nobody tests is the floor nobody supports. Passing ``--expect-min``
-   asserts they agree.
+   tells HACS the oldest Home Assistant this integration supports, and the
+   floor is kept at the current stable release, which is the one release CI
+   runs. If the two differ, the number is decorative: the floor nobody tests
+   is the floor nobody supports. A Dependabot bump to
+   ``requirements_test_latest.txt`` fails this until ``hacs.json`` moves
+   with it.
 
 Usage::
 
-    python scripts/check_min_ha_version.py               # import only
-    python scripts/check_min_ha_version.py --expect-min  # + floor check
+    python scripts/check_min_ha_version.py
 """
 
 from __future__ import annotations
@@ -76,16 +77,7 @@ def _declared_floor() -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--expect-min",
-        action="store_true",
-        help=(
-            "also assert the installed Home Assistant is exactly the floor "
-            "declared in hacs.json. Use this on the minimum lane only."
-        ),
-    )
-    args = parser.parse_args()
+    argparse.ArgumentParser(description=__doc__).parse_args()
 
     import homeassistant.const as ha_const
 
@@ -95,20 +87,18 @@ def main() -> int:
     print("Importing every integration module:")
     _import_all()
 
-    if args.expect_min:
-        floor = _declared_floor()
-        if installed != floor:
-            print(
-                f"\nhacs.json declares a minimum of {floor}, but the minimum "
-                f"lane is running {installed}.\n"
-                "A floor nobody tests is a floor nobody supports: either "
-                "point requirements_test_min.txt at the declared floor, or "
-                "raise the floor in hacs.json (and in the README's "
-                "compatibility note) to what CI actually exercises.",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"hacs.json floor {floor} matches the release under test")
+    floor = _declared_floor()
+    if installed != floor:
+        print(
+            f"\nhacs.json declares a minimum of {floor}, but CI is running "
+            f"{installed}.\n"
+            "The floor is kept at the release CI tests. If this is a "
+            "pytest-homeassistant-custom-component bump, set "
+            f'"homeassistant": "{installed}" in hacs.json on the same branch.',
+            file=sys.stderr,
+        )
+        return 1
+    print(f"hacs.json floor {floor} matches the release under test")
 
     manifest = json.loads(
         (REPO_ROOT / "custom_components" / "unifi_play" / "manifest.json").read_text(

@@ -13,12 +13,12 @@
 # need to see the whole package rather than the staged subset, belong at push.
 default_install_hook_types: [pre-commit, pre-push]
 
-# 3.13 because __init__.py uses the 3.12+ `type X = Y` statement: an older
-# interpreter cannot parse the package at all, and flake8 reports E999 on a
-# file that is perfectly valid. Home Assistant requires 3.13 itself, so this
-# is no extra burden on contributors.
+# 3.14 because the Home Assistant release this integration supports requires
+# it, so a contributor already has it. Anything older than 3.12 also cannot
+# parse the `type X = Y` statement in __init__.py, and flake8 reports E999 on
+# a file that is perfectly valid.
 default_language_version:
-  python: python3.13
+  python: python3.14
 
 repos:
   - repo: https://github.com/psf/black-pre-commit-mirror
@@ -70,7 +70,7 @@ repos:
         # Catches the v1.2.0 failure: a call on the client whose method has
         # been removed. Needs the whole package, so it cannot be a per-file
         # hook, and it is fast enough to run on every push.
-        entry: python3.13 scripts/check_mqtt_client_calls.py
+        entry: python3.14 scripts/check_mqtt_client_calls.py
         language: system
         pass_filenames: false
         always_run: true
@@ -79,7 +79,7 @@ repos:
         name: MQTT cert-generation fallback
         # The #21 fallback cannot be caught by the client-call guard and the
         # failure shapes that matter cannot be produced on demand on hardware.
-        entry: python3.13 scripts/check_mqtt_cert_generations.py
+        entry: python3.14 scripts/check_mqtt_cert_generations.py
         language: system
         pass_filenames: false
         always_run: true
@@ -88,7 +88,7 @@ repos:
         name: every tls_set uses the bundled cert generations
         # A hardcoded pair cannot reach a device whose CA has rotated, and
         # under TLS 1.3 the rejection is silent (#24).
-        entry: python3.13 scripts/check_cert_generation_users.py
+        entry: python3.14 scripts/check_cert_generation_users.py
         language: system
         pass_filenames: false
         always_run: true
@@ -98,7 +98,7 @@ repos:
         # The suite has to run to produce a report, so this is a push-time
         # hook rather than a commit-time one. 95% per module, 100% for the
         # config flow.
-        entry: bash -c 'pytest -q --cov --cov-report=json:coverage.json >/dev/null && python3.13 scripts/check_coverage.py coverage.json'
+        entry: bash -c 'pytest -q --cov --cov-report=json:coverage.json >/dev/null && python3.14 scripts/check_coverage.py coverage.json'
         language: system
         pass_filenames: false
         always_run: true
@@ -108,7 +108,7 @@ repos:
         # A ${{ }} inside a run: block is text substitution before bash sees
         # the line, so a dispatch input or a tag name becomes source in a job
         # holding a token that can write to this repository.
-        entry: python3.13 scripts/check_workflow_injection.py
+        entry: python3.14 scripts/check_workflow_injection.py
         language: system
         pass_filenames: false
         always_run: true
@@ -118,7 +118,7 @@ repos:
         # A zone written with "host" set forms correctly on every device but
         # never carries audio to the members - silent in one room, loud
         # nowhere. Static because the failure needs two speakers to observe.
-        entry: python3.13 scripts/check_set_groups_payload.py
+        entry: python3.14 scripts/check_set_groups_payload.py
         language: system
         pass_filenames: false
         always_run: true
@@ -129,7 +129,7 @@ repos:
         # with no evidence, or a file that omitted a rule we already pin,
         # would otherwise sit until someone noticed. New upstream rules
         # are the scheduled quality-scale-upstream workflow, not this hook.
-        entry: python3.13 scripts/check_quality_scale.py
+        entry: python3.14 scripts/check_quality_scale.py
         language: system
         pass_filenames: false
         always_run: true
