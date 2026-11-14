@@ -32,7 +32,16 @@ jobs:
     runs-on: ubuntu-latest
     # Skip comments on a pull request. pull_request opened has no issue
     # object; name it so that absence cannot be read as "skip".
-    if: github.event_name == 'pull_request' || github.event.issue.pull_request == null
+    #
+    # Also skip pull requests Dependabot opens. GitHub gives a run that
+    # Dependabot triggers Dependabot secrets only, not repository secrets,
+    # so the webhook URL is empty, the POST fails, and every Dependabot PR
+    # showed a red check that said nothing about the change (#68, #70).
+    if: >-
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.user.login != 'dependabot[bot]')
+      || (github.event_name != 'pull_request'
+        && github.event.issue.pull_request == null)
     steps:
       - name: Post the event to the HA watcher
         env:
