@@ -30,7 +30,7 @@ A Home Assistant custom integration for **UniFi Play** devices (PowerAmp, In-Wal
 
 | | Version |
 |---|---|
-| Home Assistant | The current stable release (2026.10.1 or newer today) |
+| Home Assistant | The current stable release; the exact minimum is in [`hacs.json`](hacs.json) |
 | Python | 3.14 (whatever your Home Assistant runs) |
 | Network | UDP 10001 and TCP 8883 from Home Assistant to each speaker |
 

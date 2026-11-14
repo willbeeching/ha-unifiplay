@@ -12,7 +12,7 @@ One Home Assistant release runs in CI on every push and pull request.
 
 | Home Assistant | Python | Requirements |
 |---|---|---|
-| 2026.10.1 | 3.14 | `requirements_test_latest.txt` |
+| whatever `requirements_test_latest.txt` pins | 3.14 | `requirements_test_latest.txt` |
 
 It is also the floor declared in `hacs.json`.
 `scripts/check_min_ha_version.py` fails the build if the two ever disagree,
